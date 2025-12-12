@@ -4,13 +4,13 @@ Sync Strava club events to ICS calendar feeds.
 
 ## Structure
 
-This is a monorepo containing three packages:
-
 ```
 club-calendar/
 ├── core/     # club-calendar-core - SDK/library
 ├── cli/      # club-calendar-cli - Command-line interface
-└── web/      # club-calendar-web - Web interface
+└── macos/    # macOS-specific clients
+    ├── launchd/   # Background sync service
+    └── menubar/   # Menu bar app (future)
 ```
 
 ## Packages
@@ -19,7 +19,6 @@ club-calendar/
 |---------|-------------|---------|
 | [core](core/) | Core SDK - Strava API, ICS generation, business logic | Library |
 | [cli](cli/) | CLI interface | `club-calendar` |
-| [web](web/) | Web interface (FastAPI + htmx) | `club-calendar-web` |
 
 ## Quick Start
 
@@ -28,16 +27,15 @@ club-calendar/
 cd cli && uv sync
 uv run club-calendar --help
 
-# Install Web
-cd web && uv sync
-uv run club-calendar-web
+# Install launchd service (daily sync)
+./macos/launchd/install.sh --hour 6 --minute 0
 ```
 
 ## Development
 
 Each package has its own virtual environment and can be developed independently.
 
-The `cli` and `web` packages depend on `core` via path dependencies:
+The `cli` package depends on `core` via path dependencies:
 
 ```toml
 [tool.uv.sources]
@@ -56,10 +54,17 @@ club-calendar-core = { path = "../core" }
         │                       │
         ▼                       ▼
 ┌───────────────┐       ┌───────────────┐
-│club-calendar- │       │club-calendar- │
-│     cli       │       │     web       │
-│  (Click CLI)  │       │(FastAPI+htmx) │
+│club-calendar- │       │    macos/     │
+│     cli       │       │   menubar     │
+│  (Click CLI)  │       │   (future)    │
 └───────────────┘       └───────────────┘
+        ▲
+        │
+┌───────────────┐
+│    macos/     │
+│   launchd     │
+│  (runs CLI)   │
+└───────────────┘
 ```
 
 ## License
