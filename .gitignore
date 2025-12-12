@@ -1,0 +1,7 @@
+# Child repos are independent
+core/
+cli/
+web/
+
+# Keep README
+!README.md
