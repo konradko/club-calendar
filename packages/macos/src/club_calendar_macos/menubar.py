@@ -1,6 +1,7 @@
 """macOS menu bar app for Club Calendar."""
 
 import logging
+import plistlib
 import subprocess
 import sys
 import webbrowser
@@ -237,6 +238,122 @@ class MenuBarController:
         except Exception as e:
             return SetupResult(success=False, message=str(e)[:100])
 
+    # Login item management
+
+    @staticmethod
+    def _get_launch_agent_path() -> Path:
+        """Get path to the launch agent plist."""
+        return Path.home() / "Library" / "LaunchAgents" / "com.club-calendar.menubar.plist"
+
+    @staticmethod
+    def _get_app_executable() -> str:
+        """Get the path to the app executable.
+
+        Returns the appropriate path whether running from:
+        - .app bundle (DMG install): /Applications/Club Calendar.app/Contents/MacOS/Club Calendar
+        - Source install: the current Python with -m entry point
+        """
+        executable = Path(sys.executable)
+
+        # Check if running from a .app bundle
+        if ".app/Contents/MacOS" in str(executable):
+            return str(executable)
+
+        # Running from source - use the entry point script
+        # The entry point is installed as 'club-calendar-menubar' in the venv bin
+        venv_bin = executable.parent
+        entry_point = venv_bin / "club-calendar-menubar"
+        if entry_point.exists():
+            return str(entry_point)
+
+        # Fallback: use python -m
+        return f"{executable} -m club_calendar_macos.menubar"
+
+    def is_login_enabled(self) -> bool:
+        """Check if app is configured to start at login."""
+        return self._get_launch_agent_path().exists()
+
+    def enable_login(self) -> SetupResult:
+        """Enable starting app at login via launchd."""
+        try:
+            plist_path = self._get_launch_agent_path()
+            plist_path.parent.mkdir(parents=True, exist_ok=True)
+
+            executable = self._get_app_executable()
+            logs_dir = get_logs_dir()
+            logs_dir.mkdir(parents=True, exist_ok=True)
+
+            # Build program arguments
+            if " -m " in executable:
+                # Python module invocation
+                parts = executable.split()
+                program_args = parts
+            else:
+                program_args = [executable]
+
+            plist_data = {
+                "Label": "com.club-calendar.menubar",
+                "ProgramArguments": program_args,
+                "RunAtLoad": True,
+                "KeepAlive": False,  # Don't restart if quit manually
+                "StandardOutPath": str(logs_dir / "menubar.log"),
+                "StandardErrorPath": str(logs_dir / "menubar.error.log"),
+            }
+
+            with open(plist_path, "wb") as f:
+                plistlib.dump(plist_data, f)
+
+            # Load the agent
+            subprocess.run(
+                ["launchctl", "unload", str(plist_path)],
+                capture_output=True,
+            )
+            subprocess.run(
+                ["launchctl", "load", str(plist_path)],
+                capture_output=True,
+                check=True,
+            )
+            return SetupResult(success=True, message="Will start at login")
+        except Exception as e:
+            return SetupResult(success=False, message=str(e)[:100])
+
+    def disable_login(self) -> SetupResult:
+        """Disable starting app at login."""
+        plist_path = self._get_launch_agent_path()
+
+        try:
+            if plist_path.exists():
+                subprocess.run(
+                    ["launchctl", "unload", str(plist_path)],
+                    capture_output=True,
+                )
+                plist_path.unlink()
+            return SetupResult(success=True, message="Removed from login items")
+        except Exception as e:
+            return SetupResult(success=False, message=str(e)[:100])
+
+    def set_sync_interval(self, minutes: int) -> SetupResult:
+        """Set the auto-sync interval."""
+        try:
+            self.settings.sync_interval_minutes = minutes
+            self.settings.save()
+            return SetupResult(success=True, message=f"Sync interval: {minutes} min")
+        except Exception as e:
+            return SetupResult(success=False, message=str(e)[:100])
+
+    def get_sync_interval(self) -> int:
+        """Get the current sync interval in minutes."""
+        return self.settings.sync_interval_minutes
+
+    def should_auto_sync(self) -> bool:
+        """Check if enough time has passed for auto-sync."""
+        if not self.is_ready():
+            return False
+        if self.last_sync is None:
+            return True
+        elapsed = (datetime.now() - self.last_sync).total_seconds() / 60
+        return elapsed >= self.settings.sync_interval_minutes
+
 
 class OAuthCallbackHandler:
     """HTTP handler for OAuth callback.
@@ -404,6 +521,25 @@ def create_app(rumps_module=None, controller=None):
                 settings_menu.add(rumps.MenuItem("Change Clubs...", callback=self.run_clubs))
                 settings_menu.add(rumps.MenuItem("Re-authenticate...", callback=self.run_auth))
                 settings_menu.add(rumps.separator)
+
+                # Sync interval submenu
+                interval_menu = rumps.MenuItem("Sync Interval")
+                current_interval = self.controller.get_sync_interval()
+                for minutes, label in [
+                    (15, "15 minutes"),
+                    (30, "30 minutes"),
+                    (60, "1 hour"),
+                    (120, "2 hours"),
+                    (240, "4 hours"),
+                ]:
+                    item = rumps.MenuItem(
+                        label,
+                        callback=lambda _, m=minutes: self.set_sync_interval(m),
+                    )
+                    item.state = current_interval == minutes
+                    interval_menu.add(item)
+                settings_menu.add(interval_menu)
+
                 settings_menu.add(rumps.MenuItem("Edit Config File...", callback=self.edit_config))
                 self.menu.add(settings_menu)
             else:
@@ -414,6 +550,9 @@ def create_app(rumps_module=None, controller=None):
                 self.menu.add(rumps.MenuItem("Run Setup Wizard...", callback=self.setup_wizard))
 
             self.menu.add(rumps.separator)
+            login_item = rumps.MenuItem("Start at Login", callback=self.toggle_login)
+            login_item.state = self.controller.is_login_enabled()
+            self.menu.add(login_item)
             self.menu.add(rumps.MenuItem("View Logs...", callback=self.view_logs))
             self.menu.add(rumps.MenuItem("Quit", callback=self.quit_app))
 
@@ -435,10 +574,10 @@ def create_app(rumps_module=None, controller=None):
                     message=result.message,
                 )
 
-        @rumps.timer(3600)  # Auto-sync every hour
+        @rumps.timer(60)  # Check every minute
         def auto_sync(self, _) -> None:
-            """Automatically sync in the background."""
-            if self.controller.is_ready():
+            """Automatically sync in the background based on configured interval."""
+            if self.controller.should_auto_sync():
                 logger.info("Running auto-sync...")
                 result = self.controller.run_sync()
                 if result.success:
@@ -752,6 +891,31 @@ def create_app(rumps_module=None, controller=None):
                 "Club Calendar",
                 "Setup Complete!",
                 f"{len(selected_ids)} club(s) configured. Click 'Sync Now' to fetch events.",
+            )
+
+        @rumps.clicked("Start at Login")
+        def toggle_login(self, sender) -> None:
+            """Toggle start at login setting."""
+            if self.controller.is_login_enabled():
+                result = self.controller.disable_login()
+            else:
+                result = self.controller.enable_login()
+
+            self._update_menu()
+            rumps.notification(
+                title="Club Calendar",
+                subtitle="Start at Login",
+                message=result.message,
+            )
+
+        def set_sync_interval(self, minutes: int) -> None:
+            """Set the sync interval."""
+            result = self.controller.set_sync_interval(minutes)
+            self._update_menu()
+            rumps.notification(
+                title="Club Calendar",
+                subtitle="Sync Interval",
+                message=result.message,
             )
 
         @rumps.clicked("View Logs...")

@@ -607,6 +607,158 @@ class TestMenuBarController:
 
         assert result.success is False
 
+    def test_is_login_enabled_when_plist_exists(self, mock_settings, tmp_path):
+        """Test is_login_enabled returns True when plist exists."""
+        controller = MenuBarController(settings=mock_settings)
+        plist_path = tmp_path / "com.club-calendar.menubar.plist"
+        plist_path.touch()
+
+        with patch.object(MenuBarController, "_get_launch_agent_path", return_value=plist_path):
+            assert controller.is_login_enabled() is True
+
+    def test_is_login_enabled_when_plist_missing(self, mock_settings, tmp_path):
+        """Test is_login_enabled returns False when plist missing."""
+        controller = MenuBarController(settings=mock_settings)
+        plist_path = tmp_path / "com.club-calendar.menubar.plist"
+        # Don't create the file
+
+        with patch.object(MenuBarController, "_get_launch_agent_path", return_value=plist_path):
+            assert controller.is_login_enabled() is False
+
+    def test_enable_login_creates_plist(self, mock_settings, tmp_path):
+        """Test enable_login creates launch agent plist."""
+        controller = MenuBarController(settings=mock_settings)
+        plist_path = tmp_path / "LaunchAgents" / "com.club-calendar.menubar.plist"
+        logs_dir = tmp_path / "Logs"
+
+        with (
+            patch.object(MenuBarController, "_get_launch_agent_path", return_value=plist_path),
+            patch("club_calendar_macos.menubar.get_logs_dir", return_value=logs_dir),
+            patch("subprocess.run") as mock_run,
+        ):
+            result = controller.enable_login()
+
+        assert result.success is True
+        assert plist_path.exists()
+        # Check launchctl was called
+        assert mock_run.call_count == 2  # unload + load
+
+    def test_enable_login_handles_error(self, mock_settings, tmp_path):
+        """Test enable_login handles errors gracefully."""
+        controller = MenuBarController(settings=mock_settings)
+        plist_path = tmp_path / "LaunchAgents" / "com.club-calendar.menubar.plist"
+
+        with (
+            patch.object(MenuBarController, "_get_launch_agent_path", return_value=plist_path),
+            patch("club_calendar_macos.menubar.get_logs_dir", side_effect=OSError("err")),
+        ):
+            result = controller.enable_login()
+
+        assert result.success is False
+
+    def test_disable_login_removes_plist(self, mock_settings, tmp_path):
+        """Test disable_login removes launch agent plist."""
+        controller = MenuBarController(settings=mock_settings)
+        plist_path = tmp_path / "com.club-calendar.menubar.plist"
+        plist_path.touch()
+
+        with (
+            patch.object(MenuBarController, "_get_launch_agent_path", return_value=plist_path),
+            patch("subprocess.run") as mock_run,
+        ):
+            result = controller.disable_login()
+
+        assert result.success is True
+        assert not plist_path.exists()
+        mock_run.assert_called_once()  # unload
+
+    def test_disable_login_when_not_enabled(self, mock_settings, tmp_path):
+        """Test disable_login succeeds when plist doesn't exist."""
+        controller = MenuBarController(settings=mock_settings)
+        plist_path = tmp_path / "com.club-calendar.menubar.plist"
+        # Don't create the file
+
+        with patch.object(MenuBarController, "_get_launch_agent_path", return_value=plist_path):
+            result = controller.disable_login()
+
+        assert result.success is True
+
+    def test_get_app_executable_from_bundle(self, mock_settings):
+        """Test _get_app_executable returns bundle path when in .app."""
+        with patch("sys.executable", "/Applications/Club Calendar.app/Contents/MacOS/python"):
+            result = MenuBarController._get_app_executable()
+            assert ".app/Contents/MacOS" in result
+
+    def test_get_app_executable_from_source(self, mock_settings, tmp_path):
+        """Test _get_app_executable returns entry point when running from source."""
+        # Create mock entry point
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        entry_point = bin_dir / "club-calendar-menubar"
+        entry_point.touch()
+
+        with patch("sys.executable", str(bin_dir / "python")):
+            result = MenuBarController._get_app_executable()
+            assert result == str(entry_point)
+
+    def test_set_sync_interval(self, mock_settings):
+        """Test setting sync interval."""
+        controller = MenuBarController(settings=mock_settings)
+
+        result = controller.set_sync_interval(30)
+
+        assert result.success is True
+        assert mock_settings.sync_interval_minutes == 30
+        mock_settings.save.assert_called_once()
+
+    def test_set_sync_interval_failure(self, mock_settings):
+        """Test set_sync_interval handles errors."""
+        controller = MenuBarController(settings=mock_settings)
+        mock_settings.save.side_effect = OSError("Error")
+
+        result = controller.set_sync_interval(30)
+
+        assert result.success is False
+
+    def test_get_sync_interval(self, mock_settings):
+        """Test getting sync interval."""
+        mock_settings.sync_interval_minutes = 120
+        controller = MenuBarController(settings=mock_settings)
+
+        assert controller.get_sync_interval() == 120
+
+    def test_should_auto_sync_not_ready(self, mock_settings):
+        """Test should_auto_sync returns False when not ready."""
+        mock_settings.has_strava_credentials.return_value = False
+        controller = MenuBarController(settings=mock_settings)
+
+        assert controller.should_auto_sync() is False
+
+    def test_should_auto_sync_never_synced(self, mock_settings):
+        """Test should_auto_sync returns True when never synced."""
+        controller = MenuBarController(settings=mock_settings)
+        controller.last_sync = None
+
+        assert controller.should_auto_sync() is True
+
+    def test_should_auto_sync_interval_not_elapsed(self, mock_settings):
+        """Test should_auto_sync returns False when interval not elapsed."""
+        mock_settings.sync_interval_minutes = 60
+        controller = MenuBarController(settings=mock_settings)
+        controller.last_sync = datetime.now()  # Just synced
+
+        assert controller.should_auto_sync() is False
+
+    def test_should_auto_sync_interval_elapsed(self, mock_settings):
+        """Test should_auto_sync returns True when interval elapsed."""
+        from datetime import timedelta
+
+        mock_settings.sync_interval_minutes = 60
+        controller = MenuBarController(settings=mock_settings)
+        controller.last_sync = datetime.now() - timedelta(minutes=61)
+
+        assert controller.should_auto_sync() is True
+
 
 class TestOAuthCallbackHandler:
     """Tests for OAuth callback HTTP handler."""

@@ -96,6 +96,9 @@ class Settings:
     output_dir: Path = field(default_factory=lambda: get_config_dir() / "calendars")
     calendar_secret: str = ""
 
+    # Sync configuration
+    sync_interval_minutes: int = 60  # Default: 1 hour
+
     def __post_init__(self):
         """Generate calendar secret if not set."""
         if not self.calendar_secret:
@@ -132,6 +135,7 @@ class Settings:
             "club_city_filter": self.club_city_filter,
             "output_dir": str(self.output_dir),
             "calendar_secret": self.calendar_secret,
+            "sync_interval_minutes": self.sync_interval_minutes,
         }
         get_config_file().write_text(json.dumps(config, indent=2))
 
@@ -174,6 +178,13 @@ class Settings:
 
         calendar_secret = os.environ.get("CALENDAR_SECRET") or config.get("calendar_secret", "")
 
+        # Sync interval
+        sync_interval_env = os.environ.get("SYNC_INTERVAL_MINUTES", "")
+        if sync_interval_env:
+            sync_interval_minutes = int(sync_interval_env)
+        else:
+            sync_interval_minutes = config.get("sync_interval_minutes", 60)
+
         return cls(
             strava_client_id=strava_client_id,
             strava_client_secret=strava_client_secret,
@@ -182,6 +193,7 @@ class Settings:
             club_city_filter=club_city_filter,
             output_dir=Path(output_dir_str),
             calendar_secret=calendar_secret,
+            sync_interval_minutes=sync_interval_minutes,
         )
 
 
