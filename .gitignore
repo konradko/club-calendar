@@ -34,6 +34,9 @@ htmlcov/
 .pytest_cache/
 .tox/
 
+# Linting
+.ruff_cache/
+
 # IDEs
 .idea/
 .vscode/

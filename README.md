@@ -8,124 +8,112 @@ Sync Strava club events to ICS calendar feeds.
 # Clone and install
 git clone <repo>
 cd club-calendar
-uv sync
+make install
 
 # Authenticate with Strava
-club-calendar auth
+uv run club-calendar auth
 
 # List and save your clubs
-club-calendar clubs --save
+uv run club-calendar clubs --save
 
 # Sync events to ICS files
-club-calendar sync
+uv run club-calendar sync
 ```
 
-## Installation Options
+## Deployment Options
 
-### 1. DMG Install (Recommended)
+### 1. macOS Menu Bar App (Recommended)
 
-Download and install the standalone app:
+One-click sync with a setup wizard - no CLI required.
 
 ```bash
 # Build the DMG
-./macos/menubar/build-dmg.sh
+cd packages/macos && make dmg
 
-# Or install from pre-built DMG:
-# 1. Open dist/ClubCalendar-0.1.0.dmg
-# 2. Drag Club Calendar to Applications
-# 3. Open from Applications
+# Or run in dev mode
+cd packages/macos && make run
 ```
 
-The menu bar app provides:
-- One-click sync
-- Full setup wizard (no CLI required):
-  - Configure Strava API credentials
-  - OAuth authentication
-  - Club selection
-- Status indicator
-- macOS notifications
+See [deploy/macos-menubar/README.md](deploy/macos-menubar/README.md) for details.
 
-### 2. Development Install
+### 2. macOS Background Sync (launchd)
 
-For development or if you prefer running from source:
+Automatic daily syncs without user interaction.
 
 ```bash
-# Install dependencies
-./macos/menubar/install.sh
+# Install service (syncs daily at 6am)
+./deploy/macos-launchd/install.sh
 
-# Install with startup at login
-./macos/menubar/install.sh --startup
-
-# Check status
-./macos/menubar/install.sh --status
-
-# Remove startup
-./macos/menubar/install.sh --uninstall
+# Or specify a custom time
+./deploy/macos-launchd/install.sh --hour 8 --minute 30
 ```
 
-Run manually: `uv run club-calendar-menubar`
+See [deploy/macos-launchd/README.md](deploy/macos-launchd/README.md) for details.
 
-### 3. Background Sync (launchd)
+### 3. Docker
 
-For automatic daily syncs without user interaction:
+Self-hosted with cron sync and HTTP server.
 
 ```bash
-# Install launchd service (syncs daily at 6am)
-./macos/launchd/install.sh --hour 6 --minute 0
-
-# Uninstall
-./macos/launchd/uninstall.sh
+cd deploy/docker
+cp .env.example .env
+# Edit .env with your credentials
+docker compose up -d
 ```
 
-### 4. CLI Only
+See [deploy/docker/README.md](deploy/docker/README.md) for details.
+
+### 4. GitHub Actions
+
+Sync to GitHub Pages for public calendar URLs.
+
+```bash
+cd deploy/gh-actions
+./setup.sh
+```
+
+See [deploy/gh-actions/README.md](deploy/gh-actions/README.md) for details.
+
+### 5. CLI Only
 
 ```bash
 uv sync
-club-calendar --help
+uv run club-calendar --help
 ```
 
 ## Setup
 
-### Using the Menu Bar App (Recommended)
+### Getting Strava Credentials
 
-The menu bar app has a built-in Setup menu that handles everything:
-1. **Setup > Configure Strava API...** - Enter your Client ID and Secret
-2. **Setup > Authenticate with Strava...** - Opens browser for OAuth
-3. **Setup > Select Clubs...** - Choose which clubs to sync
+1. Go to [strava.com/settings/api](https://www.strava.com/settings/api)
+2. Create an application (use `localhost` for callback URL)
+3. Note your **Client ID** and **Client Secret**
 
-### Manual Setup (CLI)
+### Configure
 
-#### 1. Create Strava API App
-
-1. Go to https://www.strava.com/settings/api
-2. Create an application
-3. Note your Client ID and Client Secret
-
-#### 2. Configure
-
-Create a `.env` file:
+Create a `.env` file in the repo root:
 
 ```bash
 STRAVA_CLIENT_ID=your_client_id
 STRAVA_CLIENT_SECRET=your_client_secret
 ```
 
-#### 3. Authenticate
+### Authenticate
 
 ```bash
-club-calendar auth
+uv run club-calendar auth
 ```
 
 This opens a browser for OAuth and saves the refresh token to `.env`.
 
-#### 4. Select Clubs
+### Select Clubs
 
 ```bash
 # List your clubs
-club-calendar clubs
+uv run club-calendar clubs
 
 # Save club IDs to .env
-club-calendar clubs --save
+uv run club-calendar clubs --save
 ```
 
 ## CLI Commands
@@ -138,43 +126,98 @@ club-calendar sync          # Generate ICS files
 club-calendar sync --stdout # Output combined ICS to stdout
 ```
 
-## Output
+## Output Files
 
 Calendar files are written to `~/.club-calendar/`:
-- `combined.ics` - All events from all clubs
-- `club-{id}.ics` - Per-club calendar
+- `club-calendar.ics` - All events from all clubs
+- `club-calendar-{id}.ics` - Per-club calendar
 
-Subscribe to these files from any calendar app that supports ICS files.
+Subscribe to these files from any calendar app.
 
 ## Project Structure
 
 ```
 club-calendar/
-├── src/club_calendar/   # Python package
-│   ├── strava.py        # Strava API client
-│   ├── calendar.py      # ICS generation
-│   ├── services.py      # Business logic
-│   ├── config.py        # Settings
-│   ├── cli.py           # CLI commands
-│   └── menubar.py       # Menu bar app
-├── tests/               # 100% test coverage
-├── macos/
-│   ├── launchd/         # Background sync service
-│   └── menubar/         # Menu bar app installer
-└── pyproject.toml
+├── packages/
+│   ├── core/               # club-calendar-core: business logic
+│   ├── cli/                # club-calendar-cli: command-line interface
+│   └── macos/              # club-calendar-macos: menu bar app
+├── deploy/
+│   ├── docker/             # Docker deployment
+│   ├── gh-actions/         # GitHub Actions deployment
+│   ├── macos-launchd/      # macOS background sync
+│   └── macos-menubar/      # DMG build scripts
+├── .github/workflows/      # CI (lint, test)
+├── Makefile
+└── pyproject.toml          # Workspace config
 ```
 
 ## Development
 
 ```bash
-# Install dev dependencies
-uv sync
+# Install deps and pre-commit hooks
+make install
 
-# Run tests
-uv run pytest
+# Run all tests
+make test
 
-# Lint
-uv run ruff check --fix
+# Run pre-commit hooks
+make pre-commit
+```
+
+## Testing Deploy Mechanisms
+
+Each deploy mechanism can be tested locally before production use.
+
+### macOS Menu Bar (dev mode)
+
+```bash
+cd packages/macos && make run
+```
+
+The app runs from source. Use Setup menu to configure and test.
+
+### macOS launchd
+
+```bash
+# Install and run immediately
+./deploy/macos-launchd/install.sh --run-now
+
+# Check logs
+tail -f ~/.club-calendar.log
+
+# Uninstall when done
+./deploy/macos-launchd/uninstall.sh
+```
+
+### Docker
+
+```bash
+cd deploy/docker
+
+# Create test .env with your credentials
+cp .env.example .env
+# Edit .env...
+
+# Build and run
+docker compose up --build
+
+# Test the endpoint
+curl http://localhost:51470/club-calendar.ics
+
+# Stop
+docker compose down
+```
+
+### GitHub Actions
+
+Test the workflow locally with [act](https://github.com/nektos/act):
+
+```bash
+# Dry run
+act -n
+
+# Or push to a test branch and check Actions tab
 ```
 
 ## License

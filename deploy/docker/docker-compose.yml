@@ -1,0 +1,20 @@
+services:
+  club-calendar:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    env_file: .env
+    environment:
+      - TZ=${TZ:-UTC}
+      - SYNC_SCHEDULE=${SYNC_SCHEDULE:-0 8,12,16,20 * * *}
+      - PORT=${PORT:-51470}
+    ports:
+      - "${PORT:-51470}:${PORT:-51470}"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
+        reservations:
+          memory: 64M

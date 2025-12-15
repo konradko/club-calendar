@@ -1,37 +1,23 @@
-.PHONY: install test lint build clean dmg
+.PHONY: install test test-core test-cli test-macos pre-commit
 
-# Install dependencies
+# Install dependencies and set up pre-commit hooks
 install:
-	uv sync
+	uv sync --all-packages
+	uv run pre-commit install
+	uv run pre-commit install --hook-type commit-msg
 
-# Install with menubar app support
-install-menubar:
-	uv sync --extra menubar
+# Run all tests with coverage
+test: test-core test-cli test-macos
 
-# Run tests
-test:
-	uv run pytest tests/ -v
+test-core:
+	uv run pytest packages/core/tests/ --cov=club_calendar_core --cov-report=term-missing
 
-# Run tests with coverage
-test-cov:
-	uv run pytest tests/ -v --cov=club_calendar --cov-report=term-missing
+test-cli:
+	uv run pytest packages/cli/tests/ --cov=club_calendar_cli --cov-report=term-missing
 
-# Lint and fix
-lint:
-	uv run ruff check --fix src/ tests/
+test-macos:
+	uv run pytest packages/macos/tests/ --cov=club_calendar_macos --cov-report=term-missing
 
-# Build DMG
-dmg: install-menubar
-	./macos/menubar/build-dmg.sh
-
-# Clean build artifacts
-clean:
-	rm -rf build/ dist/ *.egg-info .pytest_cache .coverage
-
-# Run the CLI
-run:
-	uv run club-calendar
-
-# Run the menu bar app (dev mode)
-menubar:
-	uv run club-calendar-menubar
+# Run all pre-commit hooks manually
+pre-commit:
+	uv run pre-commit run --all-files
