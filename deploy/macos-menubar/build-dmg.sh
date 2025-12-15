@@ -16,10 +16,10 @@ echo "======================================="
 # Change to project root
 cd "$PROJECT_ROOT"
 
-# Sync dependencies including menubar extras
+# Sync all packages and dev dependencies (includes rumps, pyinstaller)
 echo ""
 echo "Installing dependencies..."
-uv sync --extra menubar
+uv sync --all-packages
 
 # Clean previous builds
 echo ""
