@@ -194,30 +194,35 @@ class MenuBarController:
         """Run the sync operation - fetches clubs, events, and syncs to Apple Calendar.
 
         Flow:
-        1. Fetch all user's clubs from Strava
-        2. Merge with existing config (preserving enabled state)
-        3. Save updated config
-        4. Fetch events for enabled clubs only
-        5. Apply flooding prevention filters
-        6. Sync to Apple Calendar
+        1. Reload settings from disk (pick up external edits)
+        2. Fetch all user's clubs from Strava
+        3. Merge with existing config (preserving enabled state)
+        4. Save updated config
+        5. Get enabled club IDs
+        6. Fetch events from enabled clubs
+        7. Apply flooding prevention filters
+        8. Sync to Apple Calendar
         """
         logger.info("Starting sync...")
         try:
-            # Step 1: Fetch all user's clubs
+            # Step 1: Reload settings from disk
+            self.reload_settings()
+
+            # Step 2: Fetch all user's clubs
             clubs = self.service.get_clubs()
             logger.info(f"Fetched {len(clubs)} clubs from Strava")
 
-            # Step 2: Merge with config
+            # Step 3: Merge with config
             new_clubs = self.settings.merge_clubs(
                 [{"id": c.id, "name": c.name, "city": c.city} for c in clubs]
             )
             if new_clubs > 0:
                 logger.info(f"Added {new_clubs} new clubs to config")
 
-            # Step 3: Save config
+            # Step 4: Save config
             self.settings.save()
 
-            # Step 4: Get enabled club IDs
+            # Step 5: Get enabled club IDs
             club_ids = self.settings.get_club_ids()
             if not club_ids:
                 return SyncResult(
@@ -225,14 +230,14 @@ class MenuBarController:
                     message="No clubs enabled. Edit config to enable clubs.",
                 )
 
-            # Step 5: Fetch events from enabled clubs
+            # Step 6: Fetch events from enabled clubs
             events = self.service.get_club_events(club_ids)
             logger.info(f"Fetched {len(events)} events from {len(club_ids)} enabled clubs")
 
-            # Step 6: Apply flooding prevention filters
+            # Step 7: Apply flooding prevention filters
             events = self._filter_events(events)
 
-            # Step 7: Sync to Apple Calendar
+            # Step 8: Sync to Apple Calendar
             result = sync_events_to_calendar(events)
 
             if result.success:

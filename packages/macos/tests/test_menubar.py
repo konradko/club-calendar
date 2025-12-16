@@ -241,10 +241,13 @@ class TestMenuBarController:
 
         controller = MenuBarController(settings=mock_settings)
 
-        with patch(
-            "club_calendar_macos.menubar.sync_events_to_calendar",
-            return_value=EventKitSyncResult(
-                success=True, message="Synced 4 events to Apple Calendar", events_added=4
+        with (
+            patch.object(controller, "reload_settings"),  # Skip reload to keep mock
+            patch(
+                "club_calendar_macos.menubar.sync_events_to_calendar",
+                return_value=EventKitSyncResult(
+                    success=True, message="Synced 4 events to Apple Calendar", events_added=4
+                ),
             ),
         ):
             result = controller.run_sync()
@@ -316,7 +319,9 @@ class TestMenuBarController:
         mock_settings.get_club_ids.return_value = []  # No enabled clubs
 
         controller = MenuBarController(settings=mock_settings)
-        result = controller.run_sync()
+
+        with patch.object(controller, "reload_settings"):  # Skip reload to keep mock
+            result = controller.run_sync()
 
         assert result.success is True
         assert "No clubs enabled" in result.message
@@ -335,9 +340,12 @@ class TestMenuBarController:
 
         controller = MenuBarController(settings=mock_settings)
 
-        with patch(
-            "club_calendar_macos.menubar.sync_events_to_calendar",
-            return_value=EventKitSyncResult(success=True, message="OK", events_added=1),
+        with (
+            patch.object(controller, "reload_settings"),  # Skip reload to keep mock
+            patch(
+                "club_calendar_macos.menubar.sync_events_to_calendar",
+                return_value=EventKitSyncResult(success=True, message="OK", events_added=1),
+            ),
         ):
             result = controller.run_sync()
 
