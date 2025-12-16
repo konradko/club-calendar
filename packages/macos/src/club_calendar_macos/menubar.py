@@ -704,7 +704,7 @@ def create_app(rumps_module=None, controller=None):
             if activity_type:
                 activity_lower = activity_type.lower()
                 if "ride" in activity_lower or "cycling" in activity_lower:
-                    return "🚴"
+                    return "🚲"
                 if "run" in activity_lower:
                     return "🏃"
                 if "swim" in activity_lower:
@@ -715,7 +715,7 @@ def create_app(rumps_module=None, controller=None):
             # Fall back to title-based detection
             title_lower = title.lower()
             if any(w in title_lower for w in ["ride", "cycling", "cycle", "bike"]):
-                return "🚴"
+                return "🚲"
             if any(w in title_lower for w in ["run", "running", "jog"]):
                 return "🏃"
             if any(w in title_lower for w in ["swim", "swimming"]):
