@@ -17,7 +17,7 @@ import argparse
 import json
 import re
 from datetime import UTC, datetime, timedelta
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # Default mock data (used if no file provided)
 DEFAULT_DATA = {
@@ -60,6 +60,12 @@ def _process_events(data: dict) -> dict:
     return data
 
 
+class MockStravaServer(ThreadingHTTPServer):
+    """Mock Strava server with address reuse enabled."""
+
+    allow_reuse_address = True
+
+
 class MockStravaHandler(BaseHTTPRequestHandler):
     """HTTP handler for mock Strava API."""
 
@@ -71,6 +77,7 @@ class MockStravaHandler(BaseHTTPRequestHandler):
     def _send_json(self, data, status=200):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Connection", "close")  # Prevent keep-alive issues
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
@@ -133,7 +140,7 @@ def main():
 ╚═══════════════════════════════════════════════════════════════╝
 """)
 
-    server = HTTPServer(("localhost", args.port), MockStravaHandler)
+    server = MockStravaServer(("localhost", args.port), MockStravaHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
