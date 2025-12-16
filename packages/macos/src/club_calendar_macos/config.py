@@ -97,6 +97,9 @@ class Settings:
     # Calendar settings
     calendar_name: str = "Club Calendar"  # Name of calendar in Apple Calendar
 
+    # OAuth callback port for Strava authentication (49152-65535 range avoids conflicts)
+    oauth_callback_port: int = 51678
+
     # Flooding prevention
     max_events_per_club_per_week: int = 10  # Max events per club per week (0 = unlimited)
     sync_weeks: int = 8  # How many weeks ahead to sync events

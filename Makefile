@@ -41,7 +41,7 @@ menubar-dev:
 		-- .venv/bin/python -m club_calendar_macos.menubar
 
 # Run menu bar app with mock Strava server for e2e testing
-MOCK_PORT ?= 8080
+MOCK_PORT ?= 51679
 SCENARIOS_DIR = packages/macos/tests/scenarios
 
 define run-mock-strava

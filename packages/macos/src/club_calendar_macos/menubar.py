@@ -389,7 +389,8 @@ class MenuBarController:
         if not self.settings.has_strava_credentials():
             return SetupResult(success=False, message="Configure credentials first")
 
-        auth_url = self.service.get_authorization_url("http://localhost:5678/callback")
+        port = self.settings.oauth_callback_port
+        auth_url = self.service.get_authorization_url(f"http://localhost:{port}/callback")
         webbrowser.open(auth_url)
         return SetupResult(success=True, message="Opening browser for authentication...")
 
@@ -615,8 +616,9 @@ def run_oauth_server(controller: MenuBarController, timeout: float = 120) -> Set
     OAuthCallbackHandler.controller = controller
     OAuthCallbackHandler.result = None
 
+    port = controller.settings.oauth_callback_port
     handler_class = _create_oauth_handler_class()
-    server = HTTPServer(("localhost", 5678), handler_class)
+    server = HTTPServer(("localhost", port), handler_class)
     server.timeout = timeout
 
     server.handle_request()

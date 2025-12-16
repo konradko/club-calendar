@@ -105,7 +105,7 @@ class MockStravaHandler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(description="Mock Strava API server")
-    parser.add_argument("--port", type=int, default=8080, help="Port to listen on")
+    parser.add_argument("--port", type=int, default=51679, help="Port to listen on")
     parser.add_argument("--data", type=str, help="JSON file with scenario data")
     args = parser.parse_args()
 
