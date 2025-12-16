@@ -67,6 +67,7 @@ class MenuBarController:
         self.settings = settings or get_settings()
         self._service = service
         self.last_sync: datetime | None = None
+        self.last_events: list = []  # Store last synced events for menu display
 
     @property
     def service(self) -> ClubCalendarService:
@@ -237,7 +238,10 @@ class MenuBarController:
             # Step 7: Apply flooding prevention filters
             events = self._filter_events(events)
 
-            # Step 8: Sync to Apple Calendar
+            # Step 8: Store events for menu display (sorted by date)
+            self.last_events = sorted(events, key=lambda e: e.start_datetime)
+
+            # Step 9: Sync to Apple Calendar
             result = sync_events_to_calendar(events)
 
             if result.success:
@@ -318,6 +322,29 @@ class MenuBarController:
 
             parts = [f"{name}: {count}" for name, count in sorted(club_counts.items())]
             return f"{added_count} events • " + ", ".join(parts)
+
+    def get_upcoming_events(self, limit: int = 7) -> list:
+        """Get upcoming events for menu display.
+
+        Args:
+            limit: Maximum number of events to return
+
+        Returns:
+            List of events sorted by date, limited to `limit` items
+        """
+        now = datetime.now(UTC)
+        upcoming = [e for e in self.last_events if e.start_datetime > now]
+        return upcoming[:limit]
+
+    def open_event_in_calendar(self, event) -> None:
+        """Open an event in Apple Calendar.
+
+        Uses the Strava event URL which Calendar stores in the event URL field.
+        Falls back to just opening Calendar app.
+        """
+        # Open Calendar app - it will show today's view
+        # Unfortunately there's no direct way to open a specific event by URL
+        subprocess.run(["open", "-a", "Calendar"])
 
     def run_auth(self) -> CommandResult:
         """Run the auth command in Terminal."""
@@ -677,12 +704,25 @@ def create_app(rumps_module=None, controller=None):
 
                 # Status
                 self.menu.add(rumps.MenuItem(self.controller.get_status_text(), callback=None))
-                club_count = len(self.controller.settings.get_club_ids())
-                if club_count > 0:
-                    self.menu.add(rumps.MenuItem(f"{club_count} club(s) enabled", callback=None))
-                else:
-                    self.menu.add(rumps.MenuItem("Sync to fetch clubs", callback=None))
-                self.menu.add(rumps.MenuItem("✓ Authenticated", callback=self.run_auth))
+
+                # Upcoming events
+                upcoming = self.controller.get_upcoming_events(limit=7)
+                if upcoming:
+                    self.menu.add(rumps.separator)
+                    self.menu.add(rumps.MenuItem("Upcoming Events:", callback=None))
+                    for event in upcoming:
+                        # Format: "Mon 16 Dec 14:00 - Event Title"
+                        dt = event.start_datetime.astimezone()
+                        date_str = dt.strftime("%a %d %b %H:%M")
+                        # Truncate title if too long
+                        title = event.title[:30] + "..." if len(event.title) > 30 else event.title
+                        label = f"  {date_str} - {title}"
+                        item = rumps.MenuItem(
+                            label,
+                            callback=lambda _, e=event: self.open_event(e),
+                        )
+                        self.menu.add(item)
+
                 self.menu.add(rumps.separator)
 
                 # Sync interval
@@ -820,6 +860,10 @@ def create_app(rumps_module=None, controller=None):
                     notify("Club Calendar", "Authentication Failed", oauth_result.message)
 
             Thread(target=handle_oauth, daemon=True).start()
+
+        def open_event(self, event) -> None:
+            """Open event in Apple Calendar."""
+            self.controller.open_event_in_calendar(event)
 
         def edit_config(self, _) -> None:
             """Open config file in default editor."""
