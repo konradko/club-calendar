@@ -743,30 +743,39 @@ def create_app(rumps_module=None, controller=None):
 
             if self.controller.is_ready():
                 # Upcoming events grouped by week
-                upcoming = self.controller.get_upcoming_events(limit=10)
+                upcoming = self.controller.get_upcoming_events(limit=15)
                 if upcoming:
                     current_week_label = None
+                    later_count = 0
                     for event in upcoming:
                         # Week grouping header
                         week_label = self._get_week_label(event.start_datetime)
+
+                        # Limit "Later" section to 5 events
+                        if week_label == "Later":
+                            later_count += 1
+                            if later_count > 5:
+                                continue
+
                         if week_label != current_week_label:
                             if current_week_label is not None:
                                 self.menu.add(rumps.separator)
                             self.menu.add(rumps.MenuItem(week_label, callback=None))
                             current_week_label = week_label
 
-                        # Format: "🚴 Club · Mon 14:00 · Title"
+                        # Format: "🚴 Mon 14:00 NieDamRady: Group Ride" (this week)
+                        # Format: "🚴 21.12 14:00 NieDamRady: Group Ride" (later)
                         dt = event.start_datetime.astimezone()
-                        date_str = dt.strftime("%a %H:%M")
+                        if week_label == "This Week":
+                            date_str = dt.strftime("%a %H:%M")
+                        else:
+                            date_str = dt.strftime("%d.%m %H:%M")
+
                         emoji = self._get_event_emoji(event.title, event.activity_type)
-                        # Truncate club and title
-                        club = (
-                            event.club_name[:15] + "…"
-                            if len(event.club_name) > 15
-                            else event.club_name
-                        )
+                        # Full club name, truncate title if needed
+                        club = event.club_name
                         title = event.title[:20] + "…" if len(event.title) > 20 else event.title
-                        label = f"  {emoji} {club} · {date_str} · {title}"
+                        label = f"  {emoji} {date_str} {club}: {title}"
                         item = rumps.MenuItem(
                             label,
                             callback=lambda _, e=event: self.open_event(e),
