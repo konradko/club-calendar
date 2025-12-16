@@ -722,6 +722,16 @@ def create_app(rumps_module=None, controller=None):
             login_item.state = self.controller.is_login_enabled()
             self.menu.add(login_item)
 
+        def _update_menu_on_main_thread(self) -> None:
+            """Schedule menu update on main thread (required by AppKit)."""
+            try:
+                from Foundation import NSOperationQueue
+
+                NSOperationQueue.mainQueue().addOperationWithBlock_(self._update_menu)
+            except ImportError:
+                # Fallback for testing without PyObjC
+                self._update_menu()
+
         def sync_now(self, _) -> None:
             """Run sync command in background thread."""
 
@@ -738,7 +748,7 @@ def create_app(rumps_module=None, controller=None):
 
                 result = self.controller.run_sync()
                 if result.success:
-                    self._update_menu()
+                    self._update_menu_on_main_thread()
                     # Silent success - menu shows last sync time
                 else:
                     notify(
@@ -771,7 +781,7 @@ def create_app(rumps_module=None, controller=None):
 
                 result = self.controller.run_sync()
                 if result.success:
-                    self._update_menu()
+                    self._update_menu_on_main_thread()
                     # Silent success - no notification for auto-sync
                     logger.info(f"Auto-sync complete: {result.message}")
                 else:
