@@ -13,12 +13,19 @@ logger = logging.getLogger(__name__)
 
 # Config schema version - bump when adding new fields or changing structure
 # Comment/example changes don't require version bump (will update on next save)
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 
 
 def get_config_dir() -> Path:
-    """Get the config directory (macOS standard: ~/Library/Application Support/)."""
-    config_dir = Path.home() / "Library" / "Application Support" / "Club Calendar"
+    """Get the config directory (macOS standard: ~/Library/Application Support/).
+
+    Can be overridden via CLUB_CALENDAR_CONFIG_DIR environment variable.
+    """
+    env_dir = os.environ.get("CLUB_CALENDAR_CONFIG_DIR")
+    if env_dir:
+        config_dir = Path(env_dir)
+    else:
+        config_dir = Path.home() / "Library" / "Application Support" / "Club Calendar"
     config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir
 
@@ -104,6 +111,9 @@ class Settings:
     max_events_per_club_per_week: int = 10  # Max events per club per week (0 = unlimited)
     sync_weeks: int = 8  # How many weeks ahead to sync events
 
+    # Menu display (total limit, prioritizes this week over next week)
+    max_menu_events: int = 15  # Max events shown in menu (0 = unlimited)
+
     def get_club_ids(self) -> list[int]:
         """Return IDs of enabled clubs only."""
         return [int(club_id) for club_id, info in self.clubs.items() if info.get("enabled", False)]
@@ -186,9 +196,12 @@ cities: []"""
             for club_id, info in self.clubs.items():
                 city_str = info.get("city") or ""
                 enabled = "true" if info.get("enabled", False) else "false"
+                # Quote strings to handle special YAML chars like [ ] : etc
+                name_quoted = f'"{info["name"]}"'
+                city_quoted = f'"{city_str}"' if city_str else '""'
                 clubs_lines.append(f"  {club_id}:")
-                clubs_lines.append(f"    name: {info['name']}")
-                clubs_lines.append(f"    city: {city_str}")
+                clubs_lines.append(f"    name: {name_quoted}")
+                clubs_lines.append(f"    city: {city_quoted}")
                 clubs_lines.append(f"    enabled: {enabled}")
             clubs_block = chr(10).join(clubs_lines)
         else:
@@ -203,7 +216,8 @@ cities: []"""
 clubs: {}"""
 
         content = f"""# Club Calendar Configuration
-# Schema version: {CURRENT_SCHEMA_VERSION} (do not edit manually)
+#
+# schema_version: do not edit manually
 #
 # Setup:
 #   1. Go to https://www.strava.com/settings/api
@@ -224,6 +238,13 @@ strava_refresh_token: {self.strava_refresh_token or '""'}  # auto-set after auth
 sync_interval_minutes: {self.sync_interval_minutes}
 sync_weeks: {self.sync_weeks}
 max_events_per_club_per_week: {self.max_events_per_club_per_week}  # 0 = unlimited
+max_menu_events: {self.max_menu_events}  # menu display limit (0 = unlimited)
+
+# Calendar settings
+calendar_name: "{self.calendar_name}"
+
+# OAuth callback port (49152-65535 range recommended)
+oauth_callback_port: {self.oauth_callback_port}
 
 {cities_block}
 
@@ -298,6 +319,13 @@ max_events_per_club_per_week: {self.max_events_per_club_per_week}  # 0 = unlimit
         max_events_per_club_per_week = config.get("max_events_per_club_per_week", 10)
         sync_weeks = config.get("sync_weeks", 8)
 
+        # Menu display
+        max_menu_events = config.get("max_menu_events", 15)
+
+        # Calendar settings
+        calendar_name = config.get("calendar_name", "Club Calendar")
+        oauth_callback_port = config.get("oauth_callback_port", 51678)
+
         # Schema version (default to 0 for old unversioned configs)
         schema_version = config.get("schema_version", 0)
 
@@ -311,6 +339,9 @@ max_events_per_club_per_week: {self.max_events_per_club_per_week}  # 0 = unlimit
             sync_interval_minutes=sync_interval_minutes,
             max_events_per_club_per_week=max_events_per_club_per_week,
             sync_weeks=sync_weeks,
+            max_menu_events=max_menu_events,
+            calendar_name=calendar_name,
+            oauth_callback_port=oauth_callback_port,
         )
 
         # Auto-upgrade config if schema version is older

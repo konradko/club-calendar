@@ -230,7 +230,7 @@ class TestSettingsClass:
         assert "strava_client_id: test" in content
         assert "strava_client_secret: secret" in content
         assert "clubs:" in content
-        assert "name: Test Club" in content
+        assert 'name: "Test Club"' in content
         assert "enabled: true" in content
 
     def test_settings_save_load_preserves_enabled_state(self, mock_config_file):

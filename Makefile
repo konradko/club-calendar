@@ -1,5 +1,5 @@
 .PHONY: install test test-core test-cli test-macos pre-commit menubar-icons menubar-dmg menubar-dev \
-	menubar-dev-mock-strava menubar-dev-mock-strava-updated menubar-dev-mock-strava-all-deleted
+	menubar-dev-mock menubar-dev-mock-strava menubar-dev-mock-strava-updated menubar-dev-mock-strava-all-deleted
 
 # Install dependencies and set up pre-commit hooks
 install:
@@ -38,19 +38,30 @@ menubar-dev:
 		--patterns="*.py" \
 		--recursive \
 		--directory=packages/macos/src \
+		--directory=packages/core/src \
 		-- .venv/bin/python -m club_calendar_macos.menubar
 
 # Run menu bar app with mock Strava server for e2e testing
 MOCK_PORT ?= 51679
 SCENARIOS_DIR = packages/macos/tests/scenarios
+TEST_CONFIG_DIR = $(shell pwd)/packages/macos/tests/test-config
+
+# Generate fresh test config using actual Settings class
+define create-test-config
+	@.venv/bin/python packages/macos/tests/create_test_config.py
+endef
 
 define run-mock-strava
+	@pkill -f "mock_strava_server.py" 2>/dev/null || true
+	@sleep 0.5
+	$(call create-test-config)
 	uv sync --all-packages
 	@echo "Starting mock Strava server with $(1).json..."
 	@.venv/bin/python packages/macos/tests/mock_strava_server.py \
 		--port $(MOCK_PORT) --data $(SCENARIOS_DIR)/$(1).json &
 	@sleep 1
-	@echo "Starting menubar with mock Strava API..."
+	@echo "Starting menubar with mock Strava API (config: $(TEST_CONFIG_DIR))..."
+	CLUB_CALENDAR_CONFIG_DIR=$(TEST_CONFIG_DIR) \
 	STRAVA_API_URL=http://localhost:$(MOCK_PORT)/api/v3 \
 	STRAVA_TOKEN_URL=http://localhost:$(MOCK_PORT)/oauth/token \
 	STRAVA_AUTH_URL=http://localhost:$(MOCK_PORT)/oauth/authorize \
@@ -58,6 +69,29 @@ define run-mock-strava
 	@echo "Cleaning up mock server..."
 	@pkill -f "mock_strava_server.py" 2>/dev/null || true
 endef
+
+# Run with dynamic mock (generates fresh test config) + hot reload
+menubar-dev-mock:
+	@pkill -f "mock_strava_server.py" 2>/dev/null || true
+	@sleep 0.5
+	$(call create-test-config)
+	uv sync --all-packages
+	@echo "Starting mock Strava server in dynamic mode..."
+	@.venv/bin/python packages/macos/tests/mock_strava_server.py --port $(MOCK_PORT) &
+	@sleep 1
+	@echo "Starting menubar with mock Strava API and hot reload (config: $(TEST_CONFIG_DIR))..."
+	CLUB_CALENDAR_CONFIG_DIR=$(TEST_CONFIG_DIR) \
+	STRAVA_API_URL=http://localhost:$(MOCK_PORT)/api/v3 \
+	STRAVA_TOKEN_URL=http://localhost:$(MOCK_PORT)/oauth/token \
+	STRAVA_AUTH_URL=http://localhost:$(MOCK_PORT)/oauth/authorize \
+	uv run watchmedo auto-restart \
+		--patterns="*.py" \
+		--recursive \
+		--directory=packages/macos/src \
+		--directory=packages/core/src \
+		-- .venv/bin/python -m club_calendar_macos.menubar || true
+	@echo "Cleaning up mock server..."
+	@pkill -f "mock_strava_server.py" 2>/dev/null || true
 
 menubar-dev-mock-strava:
 	$(call run-mock-strava,happy)

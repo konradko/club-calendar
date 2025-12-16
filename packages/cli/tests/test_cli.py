@@ -622,6 +622,76 @@ def test_sync_files_api_error(runner: CliRunner, monkeypatch, httpx_mock: HTTPXM
     assert "Error" in result.output
 
 
+def test_sync_rate_limit_on_all_clubs_still_succeeds(
+    runner: CliRunner, monkeypatch, httpx_mock: HTTPXMock, tmp_path
+):
+    """Test sync continues when individual clubs hit rate limits (non-fatal error)."""
+    monkeypatch.setenv("STRAVA_CLIENT_ID", "id")
+    monkeypatch.setenv("STRAVA_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("STRAVA_REFRESH_TOKEN", "token")
+    monkeypatch.setenv("STRAVA_CLUB_IDS", "123")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/oauth/token" in url:
+            return httpx.Response(
+                200,
+                json={
+                    "access_token": "token",
+                    "refresh_token": "refresh",
+                    "expires_at": 9999999999,
+                },
+            )
+        if "/group_events" in url:
+            # Return 429 rate limit - this is logged but sync continues
+            return httpx.Response(429, json={"message": "Rate Limit Exceeded"})
+        return httpx.Response(404)
+
+    httpx_mock.add_callback(handler, is_reusable=True)
+
+    result = runner.invoke(main, ["sync"])
+
+    # Rate limit on a single club doesn't fail the whole sync
+    # It just results in 0 events being synced
+    assert result.exit_code == 0
+
+
+def test_sync_quiet_flag(runner: CliRunner, monkeypatch, strava_api_mock, tmp_path):
+    """Test sync with --quiet suppresses info messages."""
+    monkeypatch.setenv("STRAVA_CLIENT_ID", "id")
+    monkeypatch.setenv("STRAVA_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("STRAVA_REFRESH_TOKEN", "token")
+    monkeypatch.setenv("STRAVA_CLUB_IDS", "123")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+
+    result = runner.invoke(main, ["--quiet", "sync"])
+
+    # Should succeed but not output file paths
+    assert result.exit_code == 0
+    # With --quiet, we shouldn't see the "combined:" etc output
+    assert "combined:" not in result.output
+
+
+def test_sync_file_write_error(runner: CliRunner, monkeypatch, strava_api_mock, tmp_path):
+    """Test sync handles file write errors gracefully."""
+    from unittest.mock import patch
+
+    monkeypatch.setenv("STRAVA_CLIENT_ID", "id")
+    monkeypatch.setenv("STRAVA_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("STRAVA_REFRESH_TOKEN", "token")
+    monkeypatch.setenv("STRAVA_CLUB_IDS", "123")
+    monkeypatch.setenv("OUTPUT_DIR", str(tmp_path))
+
+    # Patch where write_calendars is imported (in cli module)
+    with patch("club_calendar_cli.calendar.write_calendars") as mock_write:
+        mock_write.side_effect = OSError("Permission denied")
+        result = runner.invoke(main, ["sync"])
+
+    assert result.exit_code == 1
+    assert "File error" in result.output
+
+
 # General CLI tests
 def test_version(runner: CliRunner):
     """Test --version flag."""

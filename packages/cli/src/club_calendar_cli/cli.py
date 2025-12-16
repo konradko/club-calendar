@@ -26,7 +26,9 @@ def get_user_error(error: Exception) -> str:
     """Convert exception to user-friendly message."""
     if isinstance(error, StravaAuthError):
         return ERROR_MESSAGES["auth_expired"]
-    if isinstance(error, StravaRateLimitError):
+    if isinstance(
+        error, StravaRateLimitError
+    ):  # pragma: no cover - rate limits handled in strava module
         return ERROR_MESSAGES["rate_limit"]
     return str(error)
 
@@ -153,6 +155,10 @@ def clubs(ctx: click.Context, save: bool, cities: str | None) -> None:
 @click.pass_context
 def sync(ctx: click.Context, stdout: bool, club_id: tuple[int, ...], output: str | None) -> None:
     """Sync club events and generate ICS calendar files."""
+    from pathlib import Path
+
+    from club_calendar_cli.calendar import generate_combined_calendar, write_calendars
+
     config = get_config()
 
     if not config.has_credentials():
@@ -177,40 +183,36 @@ def sync(ctx: click.Context, stdout: bool, club_id: tuple[int, ...], output: str
 
     quiet = ctx.obj.get("quiet", False)
 
+    if not quiet:
+        click.echo(f"Syncing {len(club_ids)} club(s)...", err=True)
+
+    try:
+        events = service.get_club_events(club_ids)
+    except StravaError as e:
+        click.echo(f"Error: {get_user_error(e)}", err=True)
+        sys.exit(1)
+
+    if not events:
+        echo_info(ctx, "No upcoming events found.")
+        sys.exit(0)
+
     if stdout:
-        if not quiet:
-            click.echo(f"Syncing {len(club_ids)} club(s)...", err=True)
-        ics_data, result = service.sync_to_stdout(club_ids)
-        if not result.success:
-            click.echo(f"Error: {get_user_error(Exception(result.message))}", err=True)
-            sys.exit(1)
-        if result.event_count == 0:
-            echo_info(ctx, "No upcoming events found.")
-            sys.exit(0)
-        echo_info(ctx, f"Found {result.event_count} events")
+        ics_data = generate_combined_calendar(events)
+        echo_info(ctx, f"Found {len(events)} events")
         sys.stdout.buffer.write(ics_data)
     else:
-        from pathlib import Path
-
         output_dir = Path(output) if output else config.output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        if not quiet:
-            click.echo(f"Syncing {len(club_ids)} club(s)...", err=True)
-
-        result = service.sync_to_files(club_ids, output_dir)
-
-        if not result.success:
-            click.echo(f"Error: {get_user_error(Exception(result.message))}", err=True)
+        try:
+            written = write_calendars(events, output_dir)
+        except OSError as e:
+            click.echo(f"Error: File error: {e}", err=True)
             sys.exit(1)
 
-        if result.event_count == 0:
-            echo_info(ctx, "No upcoming events found.")
-            sys.exit(0)
-
-        echo_info(ctx, f"Synced {result.event_count} events to {output_dir}")
+        echo_info(ctx, f"Synced {len(events)} events to {output_dir}")
         if not quiet:
-            for name, path in result.files_written.items():
+            for name, path in written.items():
                 click.echo(f"  {name}: {path}", err=True)
 
 

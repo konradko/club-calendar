@@ -8,30 +8,16 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 
-# Mock keychain for all tests (autouse)
+# Mock token store for all tests (autouse)
 @pytest.fixture(autouse=True)
-def mock_keychain():
-    """Mock keychain access for all tests."""
-    keychain_store = {
-        "club-calendar:refresh_token": "test_token",
-        "club-calendar:client_secret": "test_secret",
-    }
+def mock_token_store():
+    """Mock token store to return test refresh token."""
+    mock_store = MagicMock()
+    mock_store.get_refresh_token.return_value = "test_refresh_token"
+    mock_store.get_access_token.return_value = None
 
-    def mock_get_password(service, key):
-        return keychain_store.get(f"{service}:{key}")
-
-    def mock_set_password(service, key, value):
-        keychain_store[f"{service}:{key}"] = value
-
-    def mock_delete_password(service, key):
-        keychain_store.pop(f"{service}:{key}", None)
-
-    with (
-        patch("keyring.get_password", side_effect=mock_get_password),
-        patch("keyring.set_password", side_effect=mock_set_password),
-        patch("keyring.delete_password", side_effect=mock_delete_password),
-    ):
-        yield keychain_store
+    with patch("club_calendar_macos.menubar.get_token_store", return_value=mock_store):
+        yield mock_store
 
 
 # Mock config and logs directories for all tests (autouse)
@@ -40,7 +26,7 @@ def mock_config_file(tmp_path: Path):
     """Mock config/logs paths for all tests to ensure isolation."""
     config_dir = tmp_path / "config"
     config_dir.mkdir(exist_ok=True)
-    config_file = config_dir / "config.json"
+    config_file = config_dir / "config.yaml"
 
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir(exist_ok=True)

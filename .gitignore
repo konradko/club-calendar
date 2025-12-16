@@ -33,6 +33,7 @@ uv.lock
 htmlcov/
 .pytest_cache/
 .tox/
+packages/macos/tests/test-config/
 
 # Linting
 .ruff_cache/

@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="icon.png" alt="Club Calendar" width="128" height="128">
+</p>
+
 # Club Calendar
 
 Sync Strava club events to ICS calendar feeds.

@@ -4,11 +4,9 @@ import logging
 from collections import Counter
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 from threading import Thread
 from urllib.parse import parse_qs, urlparse
 
-from club_calendar_core.calendar import generate_combined_calendar, write_calendars
 from club_calendar_core.ports import TokenStore
 from club_calendar_core.strava import Club, ClubEvent, StravaClient, StravaError, TokenResponse
 
@@ -22,16 +20,6 @@ class OAuthResult:
     success: bool
     message: str
     refresh_token: str | None = None
-
-
-@dataclass
-class SyncResult:
-    """Result of sync operation."""
-
-    success: bool
-    message: str
-    event_count: int = 0
-    files_written: dict[str, Path] | None = None
 
 
 def filter_local_clubs(
@@ -200,7 +188,7 @@ class ClubCalendarService:
         callback_result: OAuthResult | None = None
 
         class CallbackHandler(BaseHTTPRequestHandler):
-            def do_GET(handler_self) -> None:  # noqa: N805
+            def do_GET(handler_self) -> None:  # noqa: N802, N805
                 nonlocal callback_result
                 parsed = urlparse(handler_self.path)
                 params = parse_qs(parsed.query)
@@ -307,7 +295,7 @@ class ClubCalendarService:
         return filter_local_clubs(clubs, cities, max_members)
 
     # =========================================================================
-    # Sync Operations
+    # Event Operations
     # =========================================================================
 
     def get_club_events(self, club_ids: list[int]) -> list[ClubEvent]:
@@ -324,70 +312,3 @@ class ClubCalendarService:
         """
         with self._create_client() as client:
             return client.get_all_club_events(club_ids)
-
-    def sync_to_files(self, club_ids: list[int], output_dir: Path) -> SyncResult:
-        """Sync club events to ICS calendar files.
-
-        Args:
-            club_ids: List of club IDs to sync
-            output_dir: Directory to write calendar files
-
-        Returns:
-            SyncResult with success status and files written
-        """
-        try:
-            events = self.get_club_events(club_ids)
-
-            if not events:
-                return SyncResult(
-                    success=True,
-                    message="No events found",
-                    event_count=0,
-                )
-
-            written = write_calendars(events, output_dir)
-            logger.info(f"Synced {len(events)} events to {len(written)} files")
-
-            return SyncResult(
-                success=True,
-                message=f"Synced {len(events)} events",
-                event_count=len(events),
-                files_written=written,
-            )
-        except StravaError as e:
-            logger.error(f"Sync failed: {e}")
-            return SyncResult(success=False, message=str(e))
-        except OSError as e:
-            # File system errors (permissions, disk full, etc.)
-            logger.error(f"File error during sync: {e}")
-            return SyncResult(success=False, message=f"File error: {e}")
-
-    def sync_to_stdout(self, club_ids: list[int]) -> tuple[bytes, SyncResult]:
-        """Sync club events and return ICS data.
-
-        Args:
-            club_ids: List of club IDs to sync
-
-        Returns:
-            Tuple of (ICS bytes, SyncResult)
-        """
-        try:
-            events = self.get_club_events(club_ids)
-
-            if not events:
-                return b"", SyncResult(
-                    success=True,
-                    message="No events found",
-                    event_count=0,
-                )
-
-            ics_data = generate_combined_calendar(events)
-
-            return ics_data, SyncResult(
-                success=True,
-                message=f"Generated calendar with {len(events)} events",
-                event_count=len(events),
-            )
-        except StravaError as e:
-            logger.error(f"Sync failed: {e}")
-            return b"", SyncResult(success=False, message=str(e))

@@ -26,6 +26,8 @@ dev = [
     "pre-commit>=4.0",
     "pyinstaller>=6.0",
     "rumps>=0.4",
+    "pillow>=10.0",
+    "watchdog>=4.0",
 ]
 
 [tool.ruff]

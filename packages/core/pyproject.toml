@@ -1,13 +1,12 @@
 [project]
 name = "club-calendar-core"
 version = "0.1.0"
-description = "Core library for syncing Strava club events to ICS calendars"
+description = "Core library for fetching Strava club events"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 dependencies = [
     "httpx>=0.27",
-    "icalendar>=6.0",
 ]
 
 [build-system]

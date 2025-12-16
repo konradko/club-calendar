@@ -9,11 +9,12 @@ project_root = spec_dir.parent.parent
 
 block_cipher = None
 
-# Include icon in the app bundle
-icon_png = project_root / "icon.png"
+# Include template icons in the app bundle
 datas = []
-if icon_png.exists():
-    datas.append((str(icon_png), "."))
+for icon_file in ["icon_menubarTemplate.png", "icon_menubarTemplate@2x.png"]:
+    icon_path = spec_dir / icon_file
+    if icon_path.exists():
+        datas.append((str(icon_path), "."))
 
 a = Analysis(
     [str(project_root / "packages" / "macos" / "src" / "club_calendar_macos" / "menubar.py")],
@@ -32,7 +33,7 @@ a = Analysis(
         "club_calendar_cli",
         "httpx",
         "icalendar",
-        "keyring",
+        "yaml",
     ],
     hookspath=[],
     hooksconfig={},

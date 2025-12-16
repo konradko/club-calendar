@@ -11,6 +11,14 @@ from pathlib import Path
 from threading import Thread
 from urllib.parse import parse_qs, urlparse
 
+try:
+    from AppKit import NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName
+    from Foundation import NSAttributedString, NSMutableAttributedString
+
+    HAS_APPKIT = True
+except ImportError:
+    HAS_APPKIT = False
+
 from club_calendar_core.service import ClubCalendarService, OAuthResult
 
 from club_calendar_macos.config import (
@@ -326,6 +334,8 @@ class MenuBarController:
     def get_upcoming_events(self, limit: int = 7) -> list:
         """Get upcoming events for menu display.
 
+        Includes today's events (even if past start time) and future events.
+
         Args:
             limit: Maximum number of events to return
 
@@ -333,7 +343,9 @@ class MenuBarController:
             List of events sorted by date, limited to `limit` items
         """
         now = datetime.now(UTC)
-        upcoming = [e for e in self.last_events if e.start_datetime > now]
+        today = now.date()
+        # Include today's events (even past) and future events
+        upcoming = [e for e in self.last_events if e.start_datetime.date() >= today]
         return upcoming[:limit]
 
     def open_event_in_calendar(self, event) -> None:
@@ -691,9 +703,25 @@ def create_app(rumps_module=None, controller=None):
                 icon=icon_path,
                 template=True,
                 title="📅" if not icon_path else None,
+                quit_button=None,  # We add our own Quit button
             )
             self.controller = controller
             self._update_menu()
+
+            # Auto-sync on startup if ready
+            if self.controller.is_ready():
+                self._sync_on_startup()
+
+        def _sync_on_startup(self) -> None:
+            """Run initial sync in background thread."""
+            import threading
+
+            def do_sync():
+                result = self.controller.run_sync()
+                if result.success:
+                    self._update_menu_on_main_thread()
+
+            threading.Thread(target=do_sync, daemon=True).start()
 
         def _get_event_emoji(self, title: str, activity_type: str | None = None) -> str:
             """Get emoji for event based on activity type or title keywords.
@@ -706,7 +734,7 @@ def create_app(rumps_module=None, controller=None):
             if activity_type:
                 activity_lower = activity_type.lower()
                 if "ride" in activity_lower or "cycling" in activity_lower:
-                    return "🚲"
+                    return "🚴"
                 if "run" in activity_lower:
                     return "🏃"
                 if "swim" in activity_lower:
@@ -717,7 +745,7 @@ def create_app(rumps_module=None, controller=None):
             # Fall back to title-based detection
             title_lower = title.lower()
             if any(w in title_lower for w in ["ride", "cycling", "cycle", "bike"]):
-                return "🚲"
+                return "🚴"
             if any(w in title_lower for w in ["run", "running", "jog"]):
                 return "🏃"
             if any(w in title_lower for w in ["swim", "swimming"]):
@@ -726,30 +754,146 @@ def create_app(rumps_module=None, controller=None):
                 return "🥾"
             return "📅"
 
-        def _get_day_label(self, event_dt: datetime) -> tuple[str, bool]:
+        def _get_day_label(self, event_dt: datetime) -> tuple[str, bool, bool, bool]:
             """Get day label for event grouping.
 
             Returns:
-                Tuple of (label, is_this_week)
+                Tuple of (day_label, is_this_week, is_today, is_next_week)
             """
             now = datetime.now(event_dt.tzinfo or UTC)
             event_date = event_dt.date()
             today = now.date()
 
+            # Check if this week or next week (same ISO week and year)
+            event_year, event_week, _ = event_dt.isocalendar()
+            now_year, current_week, _ = now.isocalendar()
+            is_this_week = event_year == now_year and event_week == current_week
+            is_next_week = (event_year == now_year and event_week == current_week + 1) or (
+                event_year == now_year + 1 and current_week >= 52 and event_week == 1
+            )
+
             if event_date == today:
-                # "Today (Tue, 16 Dec):"
-                return f"Today ({event_dt.strftime('%a, %d %b')}):", True
+                return f"Today ({event_dt.strftime('%a, %d %b')}):", True, True, False
             elif event_date == today + timedelta(days=1):
-                return "Tomorrow:", True
+                return f"Tomorrow ({event_dt.strftime('%a, %d %b')}):", True, False, False
+            elif is_this_week:
+                return (
+                    f"{event_dt.strftime('%A')} ({event_dt.strftime('%d %b')}):",
+                    True,
+                    False,
+                    False,
+                )
+            elif is_next_week:
+                # Next week: "24 Dec (Wed):" - date first
+                return (
+                    f"{event_dt.strftime('%d %b')} ({event_dt.strftime('%a')}):",
+                    False,
+                    False,
+                    True,
+                )
             else:
-                # Check if this week (same ISO week)
-                _, event_week, _ = event_dt.isocalendar()
-                _, current_week, _ = now.isocalendar()
-                if event_week == current_week:
-                    # "Wednesday (18 Dec):"
-                    return f"{event_dt.strftime('%A')} ({event_dt.strftime('%d %b')}):", True
-                else:
-                    return "Later:", False
+                # Beyond next week: same format as next week
+                return (
+                    f"{event_dt.strftime('%d %b')} ({event_dt.strftime('%a')}):",
+                    False,
+                    False,
+                    False,
+                )
+
+        def _create_muted_menu_item(self, label: str, callback) -> "rumps.MenuItem":
+            """Create a menu item with muted (gray) text for event details.
+
+            Args:
+                label: The menu item text
+                callback: Callback function when clicked
+
+            Returns:
+                A rumps.MenuItem with muted text styling
+            """
+            item = rumps.MenuItem(label, callback=callback)
+
+            # Apply muted color if AppKit is available
+            if HAS_APPKIT:
+                try:
+                    # Create attributed string with secondary label color (gray)
+                    attrs = {
+                        NSForegroundColorAttributeName: NSColor.secondaryLabelColor(),
+                    }
+                    attributed_title = NSAttributedString.alloc().initWithString_attributes_(
+                        label, attrs
+                    )
+                    # Access underlying NSMenuItem and set attributed title
+                    item._menuitem.setAttributedTitle_(attributed_title)
+                except Exception:
+                    pass  # Fall back to plain text if styling fails
+
+            return item
+
+        def _create_bold_prefix_menu_item(
+            self, bold_part: str, regular_part: str
+        ) -> "rumps.MenuItem":
+            """Create a menu item with bold prefix and regular suffix.
+
+            Args:
+                bold_part: Text to display in bold (e.g., "Today")
+                regular_part: Text to display in regular weight (e.g., " (Tue, 16 Dec):")
+
+            Returns:
+                A rumps.MenuItem with mixed text styling
+            """
+            full_label = bold_part + regular_part
+            item = rumps.MenuItem(full_label, callback=None)
+
+            # Apply mixed formatting if AppKit is available
+            if HAS_APPKIT:
+                try:
+                    # Create mutable attributed string
+                    attr_string = NSMutableAttributedString.alloc().initWithString_(full_label)
+
+                    # Apply bold to the prefix
+                    bold_font = NSFont.boldSystemFontOfSize_(0)
+                    bold_range = (0, len(bold_part))
+                    attr_string.addAttribute_value_range_(
+                        NSFontAttributeName, bold_font, bold_range
+                    )
+
+                    item._menuitem.setAttributedTitle_(attr_string)
+                except Exception:
+                    pass  # Fall back to plain text if styling fails
+
+            return item
+
+        def _add_event_menu_item(
+            self, event, dt: datetime, is_today: bool, is_this_week: bool
+        ) -> None:
+            """Add a single event to the menu.
+
+            Args:
+                event: ClubEvent to display
+                dt: Localized datetime
+                is_today: Whether event is today
+                is_this_week: Whether event is this week (affects format)
+            """
+            emoji = self._get_event_emoji(event.title, event.activity_type)
+            club = event.club_name
+            title = event.title[:25] + "…" if len(event.title) > 25 else event.title
+
+            # Simple format: emoji  time  club: title
+            # Day info comes from section headers
+            time_str = dt.strftime("%H:%M")
+            label = f"{emoji}  {time_str}  {club}: {title}"
+
+            # Future today events are normal, past and future days are muted
+            now = datetime.now(dt.tzinfo)
+            is_future_today = is_today and dt > now
+            if is_future_today:
+                item = rumps.MenuItem(label, callback=lambda _, e=event: self.open_event(e))
+            else:
+                item = self._create_muted_menu_item(
+                    label,
+                    callback=lambda _, e=event: self.open_event(e),
+                )
+            self.menu.add(item)
 
         def _update_menu(self) -> None:
             """Update menu items based on current state."""
@@ -757,59 +901,76 @@ def create_app(rumps_module=None, controller=None):
 
             if self.controller.is_ready():
                 # Upcoming events grouped by day
-                # Settings: max events before hiding "Later", max "Later" events
-                max_before_later = 5  # TODO: make configurable
-                max_later_events = 5  # TODO: make configurable
+                max_events = self.controller.settings.max_menu_events
 
-                upcoming = self.controller.get_upcoming_events(limit=20)
+                upcoming = self.controller.get_upcoming_events(limit=50)
                 if upcoming:
-                    current_label = None
-                    this_week_count = 0
-                    later_count = 0
+                    # Separate this week and next week events
+                    this_week_events = []
+                    next_week_events = []
 
                     for event in upcoming:
                         dt = event.start_datetime.astimezone()
-                        day_label, is_this_week = self._get_day_label(dt)
+                        day_label, is_this_week, is_today, is_next_week = self._get_day_label(dt)
+                        if is_this_week:
+                            this_week_events.append((event, dt, day_label, is_today))
+                        elif is_next_week:
+                            next_week_events.append((event, dt, day_label))
 
-                        # Skip "Later" if we already have enough events
-                        if not is_this_week:
-                            if this_week_count >= max_before_later:
-                                continue
-                            later_count += 1
-                            if later_count > max_later_events:
-                                continue
+                    # Apply total limit: this week first, then next week
+                    total_shown = 0
+                    current_label = None
+
+                    # This week events
+                    for event, dt, day_label, is_today in this_week_events:
+                        if max_events > 0 and total_shown >= max_events:
+                            break
 
                         # Day header
                         if day_label != current_label:
-                            self.menu.add(rumps.MenuItem(day_label, callback=None))
+                            if day_label.startswith("Today"):
+                                self.menu.add(
+                                    self._create_bold_prefix_menu_item("Today", day_label[5:])
+                                )
+                            elif day_label.startswith("Tomorrow"):
+                                self.menu.add(
+                                    self._create_bold_prefix_menu_item("Tomorrow", day_label[8:])
+                                )
+                            else:
+                                self.menu.add(rumps.MenuItem(day_label, callback=None))
                             current_label = day_label
 
-                        if is_this_week:
-                            this_week_count += 1
+                        total_shown += 1
+                        self._add_event_menu_item(event, dt, is_today, is_this_week=True)
 
-                        # Format: "  🚲 14:00   NieDamRady   Group Ride"
-                        time_str = dt.strftime("%H:%M")
-                        emoji = self._get_event_emoji(event.title, event.activity_type)
-                        club = event.club_name
-                        title = event.title[:25] + "…" if len(event.title) > 25 else event.title
-                        label = f"  {emoji} {time_str}   {club}   {title}"
-                        item = rumps.MenuItem(
-                            label,
-                            callback=lambda _, e=event: self.open_event(e),
-                        )
-                        self.menu.add(item)
+                    # Next week events (fill remaining slots)
+                    if next_week_events and (max_events == 0 or total_shown < max_events):
+                        self.menu.add(rumps.separator)
+                        next_week_label = None
+
+                        for event, dt, day_label in next_week_events:
+                            if max_events > 0 and total_shown >= max_events:
+                                break
+
+                            # Day header within next week
+                            if day_label != next_week_label:
+                                self.menu.add(rumps.MenuItem(day_label, callback=None))
+                                next_week_label = day_label
+
+                            total_shown += 1
+                            self._add_event_menu_item(event, dt, is_today=False, is_this_week=False)
+
                     self.menu.add(rumps.separator)
 
                 # Main actions
-                self.menu.add(rumps.MenuItem("Sync Now", callback=self.sync_now))
+                self.menu.add(rumps.MenuItem("Sync now", callback=self.sync_now))
                 self.menu.add(rumps.separator)
 
-                # Status
-                self.menu.add(rumps.MenuItem(self.controller.get_status_text(), callback=None))
-                self.menu.add(rumps.separator)
+                # Settings submenu
+                settings_menu = rumps.MenuItem("Settings")
 
                 # Sync interval
-                interval_menu = rumps.MenuItem("Sync Interval")
+                interval_menu = rumps.MenuItem("Sync interval")
                 current_interval = self.controller.get_sync_interval()
                 for minutes, label in [
                     (0, "Disabled"),
@@ -823,27 +984,28 @@ def create_app(rumps_module=None, controller=None):
                     )
                     item.state = current_interval == minutes
                     interval_menu.add(item)
-                self.menu.add(interval_menu)
+                settings_menu.add(interval_menu)
 
-                self.menu.add(rumps.MenuItem("Edit Config...", callback=self.edit_config))
+                login_item = rumps.MenuItem("Start at login", callback=self.toggle_login)
+                login_item.state = self.controller.is_login_enabled()
+                settings_menu.add(login_item)
+
+                settings_menu.add(rumps.separator)
+                settings_menu.add(rumps.MenuItem("Edit config...", callback=self.edit_config))
+                settings_menu.add(rumps.MenuItem("View logs...", callback=self.view_logs))
+
+                self.menu.add(settings_menu)
             elif not self.controller.settings.has_strava_credentials():
                 # Step 1: Need credentials - click opens config
                 self.menu.add(
-                    rumps.MenuItem("⚙️ Set Strava Credentials...", callback=self.edit_config)
+                    rumps.MenuItem("Set Strava credentials...", callback=self.edit_config)
                 )
             else:
                 # Step 2: Have credentials, need auth - click starts OAuth
-                self.menu.add(
-                    rumps.MenuItem("🔗 Authenticate with Strava...", callback=self.run_auth)
-                )
+                self.menu.add(rumps.MenuItem("Authenticate with Strava...", callback=self.run_auth))
                 self.menu.add(rumps.separator)
-                self.menu.add(rumps.MenuItem("Edit Config...", callback=self.edit_config))
+                self.menu.add(rumps.MenuItem("Edit config...", callback=self.edit_config))
 
-            self.menu.add(rumps.separator)
-            self.menu.add(rumps.MenuItem("View Logs...", callback=self.view_logs))
-            login_item = rumps.MenuItem("Start at Login", callback=self.toggle_login)
-            login_item.state = self.controller.is_login_enabled()
-            self.menu.add(login_item)
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("Quit", callback=self.quit_app))
 

@@ -5,43 +5,15 @@
     "lastname": "User"
   },
   "clubs": [
-    {"id": 1001, "name": "Morning Runners", "city": "London", "member_count": 50},
-    {"id": 1002, "name": "Evening Cyclists", "city": "London", "member_count": 30}
+    {"id": 1000, "name": "Cyclists", "city": "London", "member_count": 30},
+    {"id": 1001, "name": "Runners", "city": "London", "member_count": 50},
+    {"id": 1002, "name": "Swimmers", "city": "London", "member_count": 20},
+    {"id": 1003, "name": "Hikers", "city": "London", "member_count": 25}
   ],
   "events": {
-    "1001": [
-      {
-        "id": 101,
-        "title": "Saturday Morning Run (UPDATED TIME)",
-        "description": "Weekly group run - now at 10am!",
-        "address": "Hyde Park",
-        "route_id": null,
-        "upcoming_occurrences": ["+3d"],
-        "club": {"id": 1001, "name": "Morning Runners"},
-        "organizing_athlete": {"firstname": "Alice"}
-      }
-    ],
-    "1002": [
-      {
-        "id": 201,
-        "title": "Tuesday Evening Ride",
-        "description": "After-work cycling",
-        "address": "Richmond Park",
-        "route_id": null,
-        "upcoming_occurrences": ["+5d"],
-        "club": {"id": 1002, "name": "Evening Cyclists"},
-        "organizing_athlete": {"firstname": "Charlie"}
-      },
-      {
-        "id": 202,
-        "title": "Thursday Social Ride",
-        "description": "New weekly event",
-        "address": "Greenwich Park",
-        "route_id": null,
-        "upcoming_occurrences": ["+1w"],
-        "club": {"id": 1002, "name": "Evening Cyclists"},
-        "organizing_athlete": {"firstname": "Diana"}
-      }
-    ]
+    "1000": "dynamic",
+    "1001": "dynamic",
+    "1002": "dynamic",
+    "1003": "dynamic"
   }
 }

@@ -5,11 +5,15 @@
     "lastname": "User"
   },
   "clubs": [
-    {"id": 1001, "name": "Morning Runners", "city": "London", "member_count": 50},
-    {"id": 1002, "name": "Evening Cyclists", "city": "London", "member_count": 30}
+    {"id": 1000, "name": "Cyclists", "city": "London", "member_count": 30},
+    {"id": 1001, "name": "Runners", "city": "London", "member_count": 50},
+    {"id": 1002, "name": "Swimmers", "city": "London", "member_count": 20},
+    {"id": 1003, "name": "Hikers", "city": "London", "member_count": 25}
   ],
   "events": {
+    "1000": [],
     "1001": [],
-    "1002": []
+    "1002": [],
+    "1003": []
   }
 }

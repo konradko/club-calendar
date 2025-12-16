@@ -238,8 +238,8 @@ class StravaClient:
             occurrence = event["upcoming_occurrences"][0].replace("Z", "+00:00")
             start_dt = datetime.fromisoformat(occurrence)
 
-            # Skip past events
-            if start_dt < now:
+            # Skip events before today (but keep today's events even if past start time)
+            if start_dt.date() < now.date():
                 continue
 
             # Get club name from event if available (handle None explicitly)

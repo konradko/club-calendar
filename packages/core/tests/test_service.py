@@ -267,115 +267,6 @@ class TestOAuthFlowE2E:
         assert result.success is False
 
 
-class TestSyncErrorHandling:
-    """Tests for sync error handling in core module."""
-
-    def test_sync_to_files_handles_strava_error(self, httpx_mock: HTTPXMock, tmp_path):
-        """Test sync_to_files catches StravaError and returns failure."""
-        # Token exchange fails
-        httpx_mock.add_response(
-            url="https://www.strava.com/oauth/token",
-            method="POST",
-            status_code=401,
-            json={"error": "invalid_token"},
-        )
-
-        service = ClubCalendarService(
-            client_id="test_id",
-            client_secret="test_secret",
-            refresh_token="test_token",
-        )
-
-        result = service.sync_to_files([123], tmp_path)
-
-        assert result.success is False
-        assert "Invalid" in result.message or "expired" in result.message
-
-    def test_sync_to_stdout_handles_strava_error(self, httpx_mock: HTTPXMock):
-        """Test sync_to_stdout catches StravaError and returns failure."""
-        # Token exchange fails
-        httpx_mock.add_response(
-            url="https://www.strava.com/oauth/token",
-            method="POST",
-            status_code=401,
-            json={"error": "invalid_token"},
-        )
-
-        service = ClubCalendarService(
-            client_id="test_id",
-            client_secret="test_secret",
-            refresh_token="test_token",
-        )
-
-        ics_data, result = service.sync_to_stdout([123])
-
-        assert result.success is False
-        assert ics_data == b""
-        assert "Invalid" in result.message or "expired" in result.message
-
-
-class TestSyncFileSystemE2E:
-    """E2E tests for file system error handling."""
-
-    def test_sync_to_files_handles_permission_error(self, httpx_mock: HTTPXMock, tmp_path):
-        """Test sync_to_files handles file permission errors gracefully.
-
-        True E2E test - creates a read-only directory to trigger actual OSError.
-        """
-        import os
-        import stat
-
-        # Mock successful API responses
-        def handler(request):
-            import httpx as httpx_mod
-
-            url = str(request.url)
-            if "/oauth/token" in url:
-                return httpx_mod.Response(
-                    200,
-                    json={
-                        "access_token": "t",
-                        "refresh_token": "r",
-                        "expires_at": 9999999999,
-                    },
-                )
-            if "/group_events" in url:
-                return httpx_mod.Response(
-                    200,
-                    json=[
-                        {
-                            "id": 1,
-                            "title": "Test Event",
-                            "upcoming_occurrences": ["2099-01-15T08:00:00Z"],
-                            "club": {"name": "Test Club"},
-                        }
-                    ],
-                )
-            return httpx_mod.Response(404)
-
-        httpx_mock.add_callback(handler, is_reusable=True)
-
-        service = ClubCalendarService(
-            client_id="test_id",
-            client_secret="test_secret",
-            refresh_token="test_token",
-        )
-
-        # Create a read-only directory to trigger permission error
-        readonly_dir = tmp_path / "readonly"
-        readonly_dir.mkdir()
-        os.chmod(readonly_dir, stat.S_IRUSR | stat.S_IXUSR)  # read + execute only
-
-        try:
-            result = service.sync_to_files([123], readonly_dir)
-
-            assert result.success is False
-            assert "File error" in result.message or "Permission" in result.message
-        finally:
-            # Restore permissions for cleanup
-            os.chmod(readonly_dir, stat.S_IRWXU)
-
-
 class TestFilterLocalClubs:
     """Tests for filter_local_clubs function."""
 
@@ -562,12 +453,17 @@ class TestGetClubs:
         assert clubs[0].city == "Portland"
 
 
-class TestSyncSuccess:
-    """Tests for successful sync operations."""
+class TestGetClubEvents:
+    """Tests for get_club_events method."""
 
-    def test_sync_to_files_success(self, httpx_mock: HTTPXMock, tmp_path):
-        """Test sync_to_files with successful API and file write."""
+    def test_get_club_events_success(self, httpx_mock: HTTPXMock):
+        """Test get_club_events fetches and returns events."""
+        from datetime import datetime, timedelta
+
         import httpx
+
+        future_date = datetime.now() + timedelta(days=7)
+        future_iso = future_date.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         def handler(request: httpx.Request) -> httpx.Response:
             url = str(request.url)
@@ -586,10 +482,10 @@ class TestSyncSuccess:
                     json=[
                         {
                             "id": 1,
-                            "title": "Test Event",
-                            "upcoming_occurrences": ["2099-01-15T08:00:00Z"],
-                            "club": {"name": "Test Club"},
-                        }
+                            "title": "Morning Ride",
+                            "club_id": 123,
+                            "upcoming_occurrences": [future_iso],
+                        },
                     ],
                 )
             return httpx.Response(404)
@@ -598,111 +494,45 @@ class TestSyncSuccess:
 
         service = ClubCalendarService(client_id="id", client_secret="secret", refresh_token="token")
 
-        result = service.sync_to_files([123], tmp_path)
+        events = service.get_club_events([123])
 
-        assert result.success is True
-        assert result.event_count == 1
-        assert result.files_written is not None
-        assert "combined" in result.files_written
-        assert (tmp_path / "club-calendar.ics").exists()
+        assert len(events) == 1
+        assert events[0].title == "Morning Ride"
 
-    def test_sync_to_files_no_events(self, httpx_mock: HTTPXMock, tmp_path):
-        """Test sync_to_files with no events returns success with zero count."""
+    def test_get_club_events_auth_error_reraises(self, httpx_mock: HTTPXMock):
+        """Test get_club_events re-raises auth errors."""
         import httpx
+        from club_calendar_core.strava import StravaAuthError
+
+        call_count = {"token": 0}
 
         def handler(request: httpx.Request) -> httpx.Response:
             url = str(request.url)
             if "/oauth/token" in url:
-                return httpx.Response(
-                    200,
-                    json={
-                        "access_token": "token",
-                        "refresh_token": "refresh",
-                        "expires_at": 9999999999,
-                    },
-                )
+                call_count["token"] += 1
+                if call_count["token"] == 1:
+                    # First call succeeds (initial token)
+                    return httpx.Response(
+                        200,
+                        json={
+                            "access_token": "token",
+                            "refresh_token": "refresh",
+                            "expires_at": 9999999999,
+                        },
+                    )
+                # Subsequent calls fail (token refresh fails)
+                return httpx.Response(401, json={"error": "invalid_token"})
             if "/group_events" in url:
-                return httpx.Response(200, json=[])
+                # Return 401 to trigger auth error
+                return httpx.Response(401, json={"error": "Unauthorized"})
             return httpx.Response(404)
 
         httpx_mock.add_callback(handler, is_reusable=True)
 
         service = ClubCalendarService(client_id="id", client_secret="secret", refresh_token="token")
 
-        result = service.sync_to_files([123], tmp_path)
-
-        assert result.success is True
-        assert result.event_count == 0
-        assert "No events" in result.message
-
-    def test_sync_to_stdout_success(self, httpx_mock: HTTPXMock):
-        """Test sync_to_stdout with successful API response."""
-        import httpx
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            url = str(request.url)
-            if "/oauth/token" in url:
-                return httpx.Response(
-                    200,
-                    json={
-                        "access_token": "token",
-                        "refresh_token": "refresh",
-                        "expires_at": 9999999999,
-                    },
-                )
-            if "/group_events" in url:
-                return httpx.Response(
-                    200,
-                    json=[
-                        {
-                            "id": 1,
-                            "title": "Test Event",
-                            "upcoming_occurrences": ["2099-01-15T08:00:00Z"],
-                            "club": {"name": "Test Club"},
-                        }
-                    ],
-                )
-            return httpx.Response(404)
-
-        httpx_mock.add_callback(handler, is_reusable=True)
-
-        service = ClubCalendarService(client_id="id", client_secret="secret", refresh_token="token")
-
-        ics_data, result = service.sync_to_stdout([123])
-
-        assert result.success is True
-        assert result.event_count == 1
-        assert b"BEGIN:VCALENDAR" in ics_data
-        assert b"Test Event" in ics_data
-
-    def test_sync_to_stdout_no_events(self, httpx_mock: HTTPXMock):
-        """Test sync_to_stdout with no events returns empty bytes."""
-        import httpx
-
-        def handler(request: httpx.Request) -> httpx.Response:
-            url = str(request.url)
-            if "/oauth/token" in url:
-                return httpx.Response(
-                    200,
-                    json={
-                        "access_token": "token",
-                        "refresh_token": "refresh",
-                        "expires_at": 9999999999,
-                    },
-                )
-            if "/group_events" in url:
-                return httpx.Response(200, json=[])
-            return httpx.Response(404)
-
-        httpx_mock.add_callback(handler, is_reusable=True)
-
-        service = ClubCalendarService(client_id="id", client_secret="secret", refresh_token="token")
-
-        ics_data, result = service.sync_to_stdout([123])
-
-        assert result.success is True
-        assert result.event_count == 0
-        assert ics_data == b""
+        with pytest.raises(StravaAuthError):
+            service.get_club_events([123])
 
 
 class TestExchangeCodeExceptions:

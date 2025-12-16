@@ -1,6 +1,6 @@
 """Tests for menubar app."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
@@ -35,6 +35,7 @@ def mock_settings(tmp_path):
     }
     mock.sync_weeks = 8
     mock.max_events_per_club_per_week = 5
+    mock.max_menu_events = 15
     mock.sync_interval_minutes = 60
     return mock
 
@@ -59,11 +60,12 @@ def mock_rumps():
 
     # Create a base App class that can be subclassed
     class MockApp:
-        def __init__(self, name, icon=None, title=None, template=None):
+        def __init__(self, name, icon=None, title=None, template=None, quit_button=None):
             self.name = name
             self.icon = icon
             self.title = title
             self.template = template
+            self.quit_button = quit_button
             self.menu = MagicMock()
             self.menu.clear = MagicMock()
             self.menu.add = MagicMock()
@@ -357,7 +359,6 @@ class TestMenuBarController:
 
     def test_filter_events_limits_per_week(self, mock_settings):
         """Test _filter_events applies per-club per-week limits."""
-        from datetime import timedelta
 
         from club_calendar_core.strava import ClubEvent
 
@@ -393,7 +394,6 @@ class TestMenuBarController:
 
     def test_filter_events_respects_sync_weeks(self, mock_settings):
         """Test _filter_events filters out events beyond sync_weeks."""
-        from datetime import timedelta
 
         from club_calendar_core.strava import ClubEvent
 
@@ -860,7 +860,6 @@ class TestMenuBarController:
 
     def test_should_auto_sync_interval_elapsed(self, mock_settings):
         """Test should_auto_sync returns True when interval elapsed."""
-        from datetime import timedelta
 
         mock_settings.sync_interval_minutes = 60
         controller = MenuBarController(settings=mock_settings)
@@ -1122,6 +1121,10 @@ class TestCreateApp:
             mock_sync.return_value = SyncResult(success=True, message="2 events")
 
             app = create_app(rumps_module=mock_rumps, controller=controller)
+            # Reset mocks after startup sync
+            mock_sync.reset_mock()
+            mock_rumps.notification.reset_mock()
+
             app.auto_sync(None)
 
             mock_sync.assert_called_once()
@@ -1149,6 +1152,10 @@ class TestCreateApp:
             mock_sync.return_value = SyncResult(success=False, message="API error")
 
             app = create_app(rumps_module=mock_rumps, controller=controller)
+            # Reset mocks after startup sync
+            mock_sync.reset_mock()
+            mock_rumps.notification.reset_mock()
+
             app.auto_sync(None)
 
             mock_sync.assert_called_once()
@@ -1182,7 +1189,7 @@ class TestCreateApp:
         app._update_menu()
 
         calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
-        assert any("Sync Now" in str(c) for c in calls)
+        assert any("Sync now" in str(c) for c in calls)
 
     def test_create_app_update_menu_not_ready(self, mock_rumps, mock_settings):
         """Test _update_menu when missing creds shows setup prompt."""
@@ -1195,7 +1202,7 @@ class TestCreateApp:
         app._update_menu()
 
         calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
-        assert any("⚙️" in str(c) for c in calls)
+        assert any("Set Strava credentials" in str(c) for c in calls)
 
     def test_create_app_update_menu_valid_config(self, mock_rumps, mock_settings):
         """Test _update_menu with valid config shows Sync Now and Edit Config."""
@@ -1206,8 +1213,8 @@ class TestCreateApp:
         app._update_menu()
 
         calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
-        assert any("Sync Now" in str(c) for c in calls)
-        assert any("Edit Config" in str(c) for c in calls)
+        assert any("Sync now" in str(c) for c in calls)
+        assert any("Edit config" in str(c) for c in calls)
 
     def test_create_app_update_menu_invalid_config(self, mock_rumps, mock_settings):
         """Test _update_menu with invalid config shows warning."""
@@ -1219,7 +1226,7 @@ class TestCreateApp:
         app._update_menu()
 
         calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
-        assert any("⚙️" in str(c) for c in calls)
+        assert any("Set Strava credentials" in str(c) for c in calls)
 
     def test_create_app_update_menu_needs_auth(self, mock_rumps, mock_settings):
         """Test _update_menu when has creds but not authenticated."""
@@ -1232,8 +1239,8 @@ class TestCreateApp:
         app._update_menu()
 
         calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
-        assert any("🔗" in str(c) for c in calls)
-        assert any("Edit Config" in str(c) for c in calls)
+        assert any("Authenticate with Strava" in str(c) for c in calls)
+        assert any("Edit config" in str(c) for c in calls)
 
     def test_create_app_uses_default_controller(self, mock_rumps):
         """Test create_app creates controller if not provided."""
@@ -1261,7 +1268,7 @@ class TestCreateApp:
             mock_rumps.clicked = MagicMock(side_effect=lambda name: lambda f: f)
 
             class MockApp:
-                def __init__(self, name, icon=None, title=None, template=None):
+                def __init__(self, name, icon=None, title=None, template=None, quit_button=None):
                     self.menu = MagicMock()
 
             mock_rumps.App = MockApp
@@ -1367,3 +1374,269 @@ class TestMain:
             main()
 
             mock_app.run.assert_called_once()
+
+
+class TestGetUpcomingEvents:
+    """Tests for get_upcoming_events method."""
+
+    def test_includes_todays_past_events(self, mock_settings):
+        """Test that today's past events are included."""
+
+        from club_calendar_core.strava import ClubEvent
+
+        controller = MenuBarController(settings=mock_settings)
+        now = datetime.now(UTC)
+
+        # Create an event earlier today (past)
+        past_today = now.replace(hour=7, minute=0, second=0, microsecond=0)
+        # Create an event later today (future)
+        future_today = now + timedelta(hours=3)
+
+        controller.last_events = [
+            ClubEvent(
+                id=1,
+                title="Past Today",
+                description=None,
+                club_id=123,
+                club_name="Test Club",
+                start_datetime=past_today,
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+            ClubEvent(
+                id=2,
+                title="Future Today",
+                description=None,
+                club_id=123,
+                club_name="Test Club",
+                start_datetime=future_today,
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+        ]
+
+        upcoming = controller.get_upcoming_events(limit=10)
+
+        # Both today's events should be included
+        assert len(upcoming) == 2
+        titles = [e.title for e in upcoming]
+        assert "Past Today" in titles
+        assert "Future Today" in titles
+
+    def test_excludes_yesterdays_events(self, mock_settings):
+        """Test that yesterday's events are excluded."""
+
+        from club_calendar_core.strava import ClubEvent
+
+        controller = MenuBarController(settings=mock_settings)
+        now = datetime.now(UTC)
+
+        # Create an event yesterday
+        yesterday = now - timedelta(days=1)
+        # Create an event today
+        today = now + timedelta(hours=1)
+
+        controller.last_events = [
+            ClubEvent(
+                id=1,
+                title="Yesterday",
+                description=None,
+                club_id=123,
+                club_name="Test Club",
+                start_datetime=yesterday,
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+            ClubEvent(
+                id=2,
+                title="Today",
+                description=None,
+                club_id=123,
+                club_name="Test Club",
+                start_datetime=today,
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+        ]
+
+        upcoming = controller.get_upcoming_events(limit=10)
+
+        assert len(upcoming) == 1
+        assert upcoming[0].title == "Today"
+
+
+class TestDayLabelAndMenuFiltering:
+    """Tests for _get_day_label and menu filtering of events."""
+
+    def test_get_day_label_today(self, mock_rumps, mock_settings):
+        """Test _get_day_label returns correct label for today."""
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        now = datetime.now(UTC)
+        label, is_this_week, is_today, is_next_week = app._get_day_label(now)
+
+        assert "Today" in label
+        assert is_this_week is True
+        assert is_today is True
+        assert is_next_week is False
+
+    def test_get_day_label_tomorrow(self, mock_rumps, mock_settings):
+        """Test _get_day_label returns correct label for tomorrow."""
+
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        tomorrow = datetime.now(UTC) + timedelta(days=1)
+        label, is_this_week, is_today, is_next_week = app._get_day_label(tomorrow)
+
+        assert "Tomorrow" in label
+        assert "(" in label  # Contains date like "(Wed, 17 Dec):"
+        assert is_this_week is True
+        assert is_today is False
+        assert is_next_week is False
+
+    def test_get_day_label_this_week(self, mock_rumps, mock_settings):
+        """Test _get_day_label returns correct label for this week (not today/tomorrow)."""
+
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        # Find a day that's this week but not today or tomorrow
+        now = datetime.now(UTC)
+        # Go to a day 3 days from now (should still be this week for most cases)
+        test_date = now + timedelta(days=3)
+
+        label, is_this_week, is_today, is_next_week = app._get_day_label(test_date)
+
+        # Should have day name in label
+        assert "(" in label  # Contains date like "(20 Dec):"
+        assert is_today is False
+        # is_this_week depends on where we are in the week
+
+    def test_get_day_label_next_week(self, mock_rumps, mock_settings):
+        """Test _get_day_label returns correct label for next week."""
+
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        # Go 8 days from now (guaranteed to be next week)
+        next_week = datetime.now(UTC) + timedelta(days=8)
+        label, is_this_week, is_today, is_next_week = app._get_day_label(next_week)
+
+        assert "(" in label  # Contains date
+        assert is_this_week is False
+        assert is_today is False
+        assert is_next_week is True
+
+    def test_get_day_label_beyond_next_week(self, mock_rumps, mock_settings):
+        """Test _get_day_label returns correct flags for events beyond next week."""
+
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        # Go 15 days from now (beyond next week)
+        far_future = datetime.now(UTC) + timedelta(days=15)
+        label, is_this_week, is_today, is_next_week = app._get_day_label(far_future)
+
+        assert is_this_week is False
+        assert is_today is False
+        assert is_next_week is False
+
+    def test_menu_excludes_events_beyond_next_week(self, mock_rumps, mock_settings):
+        """Test that events beyond next week are not shown in menu."""
+
+        from club_calendar_core.strava import ClubEvent
+
+        controller = MenuBarController(settings=mock_settings)
+
+        # Create events: this week, next week, and beyond
+        now = datetime.now(UTC)
+        controller.last_events = [
+            ClubEvent(
+                id=1,
+                title="This Week Event",
+                description=None,
+                club_id=123,
+                club_name="Test Club",
+                start_datetime=now + timedelta(days=1),
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+            ClubEvent(
+                id=2,
+                title="Next Week Event",
+                description=None,
+                club_id=123,
+                club_name="Test Club",
+                start_datetime=now + timedelta(days=8),
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+            ClubEvent(
+                id=3,
+                title="Far Future Event",
+                description=None,
+                club_id=123,
+                club_name="Test Club",
+                start_datetime=now + timedelta(days=20),
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+        ]
+
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        # Check menu items - far future should not be shown
+        mock_rumps.MenuItem.reset_mock()
+        app._update_menu()
+
+        calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
+        calls_str = " ".join(calls)
+
+        # This week and next week events should be shown
+        assert "This Week Event" in calls_str or "Test Club" in calls_str
+        # Far future should NOT be shown
+        assert "Far Future Event" not in calls_str
+
+    def test_menu_shows_next_week_day_header(self, mock_rumps, mock_settings):
+        """Test that next week events show day headers."""
+
+        from club_calendar_core.strava import ClubEvent
+
+        controller = MenuBarController(settings=mock_settings)
+
+        now = datetime.now(UTC)
+        next_week_dt = now + timedelta(days=8)
+        controller.last_events = [
+            ClubEvent(
+                id=1,
+                title="Next Week Event",
+                description=None,
+                club_id=123,
+                club_name="Test Club",
+                start_datetime=next_week_dt,
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+        ]
+
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        mock_rumps.MenuItem.reset_mock()
+        app._update_menu()
+
+        calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
+        calls_str = " ".join(calls)
+
+        # Should show day header like "24 Dec (Wed):"
+        expected_header = f"{next_week_dt.strftime('%d %b')} ({next_week_dt.strftime('%a')}):"
+        assert expected_header in calls_str
