@@ -724,23 +724,49 @@ def create_app(rumps_module=None, controller=None):
                 return "🥾"
             return "📅"
 
+        def _get_week_label(self, event_dt: datetime) -> str:
+            """Get week label for event grouping."""
+            now = datetime.now(UTC)
+            _, current_week, _ = now.isocalendar()
+            _, event_week, _ = event_dt.isocalendar()
+
+            if event_week == current_week:
+                return "This Week"
+            elif event_week == current_week + 1:
+                return "Next Week"
+            else:
+                return "Later"
+
         def _update_menu(self) -> None:
             """Update menu items based on current state."""
             self.menu.clear()
 
             if self.controller.is_ready():
-                # Upcoming events (at the top)
-                upcoming = self.controller.get_upcoming_events(limit=7)
+                # Upcoming events grouped by week
+                upcoming = self.controller.get_upcoming_events(limit=10)
                 if upcoming:
+                    current_week_label = None
                     for event in upcoming:
-                        # Format: "🚴 Mon 16 Dec 14:00 - Event Title"
+                        # Week grouping header
+                        week_label = self._get_week_label(event.start_datetime)
+                        if week_label != current_week_label:
+                            if current_week_label is not None:
+                                self.menu.add(rumps.separator)
+                            self.menu.add(rumps.MenuItem(week_label, callback=None))
+                            current_week_label = week_label
+
+                        # Format: "🚴 Club · Mon 14:00 · Title"
                         dt = event.start_datetime.astimezone()
-                        date_str = dt.strftime("%a %d %b %H:%M")
-                        # Truncate title if too long
-                        title = event.title[:30] + "..." if len(event.title) > 30 else event.title
-                        # Emoji based on activity type (API) or title keywords (fallback)
+                        date_str = dt.strftime("%a %H:%M")
                         emoji = self._get_event_emoji(event.title, event.activity_type)
-                        label = f"{emoji} {date_str} - {title}"
+                        # Truncate club and title
+                        club = (
+                            event.club_name[:15] + "…"
+                            if len(event.club_name) > 15
+                            else event.club_name
+                        )
+                        title = event.title[:20] + "…" if len(event.title) > 20 else event.title
+                        label = f"  {emoji} {club} · {date_str} · {title}"
                         item = rumps.MenuItem(
                             label,
                             callback=lambda _, e=event: self.open_event(e),

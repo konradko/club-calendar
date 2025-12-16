@@ -119,6 +119,31 @@ def _find_or_create_calendar(store) -> tuple:
     return calendar, None
 
 
+def _get_activity_emoji(title: str, activity_type: str | None = None) -> str:
+    """Get emoji for event based on activity type or title keywords."""
+    if activity_type:
+        activity_lower = activity_type.lower()
+        if "ride" in activity_lower or "cycling" in activity_lower:
+            return "🚴"
+        if "run" in activity_lower:
+            return "🏃"
+        if "swim" in activity_lower:
+            return "🏊"
+        if "hike" in activity_lower or "walk" in activity_lower:
+            return "🥾"
+
+    title_lower = title.lower()
+    if any(w in title_lower for w in ["ride", "cycling", "cycle", "bike"]):
+        return "🚴"
+    if any(w in title_lower for w in ["run", "running", "jog"]):
+        return "🏃"
+    if any(w in title_lower for w in ["swim", "swimming"]):
+        return "🏊"
+    if any(w in title_lower for w in ["hike", "hiking", "walk"]):
+        return "🥾"
+    return "📅"
+
+
 def _create_event(store, calendar, club_event: ClubEvent):
     """Create an EventKit event from a ClubEvent."""
     EventKit = _import_eventkit()  # noqa: N806
@@ -127,7 +152,11 @@ def _create_event(store, calendar, club_event: ClubEvent):
 
     event = EventKit.EKEvent.eventWithEventStore_(store)
     event.setCalendar_(calendar)
-    event.setTitle_(club_event.title)
+
+    # Title with emoji and club name prefix: "🚴 ClubName · Event Title"
+    emoji = _get_activity_emoji(club_event.title, club_event.activity_type)
+    title = f"{emoji} {club_event.club_name} · {club_event.title}"
+    event.setTitle_(title)
 
     # Set start and end time (2 hour default duration)
     start_date = club_event.start_datetime
@@ -314,7 +343,10 @@ def _update_event(event, club_event: ClubEvent):
 
     from Foundation import NSDate, NSTimeZone
 
-    event.setTitle_(club_event.title)
+    # Title with emoji and club name prefix: "🚴 ClubName · Event Title"
+    emoji = _get_activity_emoji(club_event.title, club_event.activity_type)
+    title = f"{emoji} {club_event.club_name} · {club_event.title}"
+    event.setTitle_(title)
 
     # Update times
     start_date = club_event.start_datetime
