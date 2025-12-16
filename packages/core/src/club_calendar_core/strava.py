@@ -257,16 +257,40 @@ class StravaClient:
         return events
 
     def get_all_club_events(self, club_ids: list[int]) -> list[ClubEvent]:
-        """Get events from multiple clubs."""
-        all_events = []
-        for club_id in club_ids:
+        """Get events from multiple clubs concurrently.
+
+        Uses a thread pool to fetch events from all clubs in parallel,
+        significantly reducing total sync time for users with many clubs.
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        all_events: list[ClubEvent] = []
+        errors: list[tuple[int, Exception]] = []
+
+        def fetch_club(club_id: int) -> tuple[int, list[ClubEvent] | Exception]:
             try:
-                events = self.get_club_events(club_id)
-                all_events.extend(events)
-            except StravaAuthError:
-                # Auth errors should fail the whole sync
-                raise
-            except StravaError as e:
-                # Non-auth errors (specific club issues) - log and continue
-                logger.warning(f"Failed to fetch events for club {club_id}: {e}")
+                return (club_id, self.get_club_events(club_id))
+            except Exception as e:
+                return (club_id, e)
+
+        # Use thread pool for concurrent fetching (httpx.Client is thread-safe)
+        # Limit workers to avoid rate limiting
+        max_workers = min(len(club_ids), 5)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(fetch_club, cid): cid for cid in club_ids}
+
+            for future in as_completed(futures):
+                club_id, result = future.result()
+
+                if isinstance(result, StravaAuthError):
+                    # Auth errors should fail the whole sync
+                    raise result
+                elif isinstance(result, Exception):
+                    # Non-auth errors - log and continue
+                    logger.warning(f"Failed to fetch events for club {club_id}: {result}")
+                    errors.append((club_id, result))
+                else:
+                    all_events.extend(result)
+
         return all_events
