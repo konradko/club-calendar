@@ -1039,7 +1039,7 @@ class TestCreateApp:
         assert app.menu.add.called
 
     def test_create_app_sync_now_success(self, mock_rumps, mock_settings):
-        """Test sync_now callback on success."""
+        """Test sync_now callback on success - silent, no notification."""
         controller = MenuBarController(settings=mock_settings)
 
         # Mock Thread to run target synchronously
@@ -1061,11 +1061,8 @@ class TestCreateApp:
             app = create_app(rumps_module=mock_rumps, controller=controller)
             app.sync_now(None)
 
-            mock_rumps.notification.assert_called_with(
-                title="Club Calendar",
-                subtitle="Calendar Updated",
-                message="Done",
-            )
+            # Success is silent - menu shows last sync time
+            mock_rumps.notification.assert_not_called()
 
     def test_create_app_sync_now_failure(self, mock_rumps, mock_settings):
         """Test sync_now callback on failure."""
@@ -1169,7 +1166,7 @@ class TestCreateApp:
             mock_rumps.notification.assert_not_called()
 
     def test_create_app_reload_settings(self, mock_rumps, mock_settings):
-        """Test reload_settings callback."""
+        """Test reload_settings callback - silent, no notification."""
         controller = MenuBarController(settings=mock_settings)
 
         with patch.object(controller, "reload_settings") as mock_reload:
@@ -1177,7 +1174,8 @@ class TestCreateApp:
             app.reload_settings(None)
 
             mock_reload.assert_called_once()
-            mock_rumps.notification.assert_called()
+            # Silent - menu update is enough
+            mock_rumps.notification.assert_not_called()
 
     def test_create_app_update_menu_ready(self, mock_rumps, mock_settings):
         """Test _update_menu when app is ready shows sync options."""

@@ -736,11 +736,7 @@ def create_app(rumps_module=None, controller=None):
                 result = self.controller.run_sync()
                 if result.success:
                     self._update_menu()
-                    notify(
-                        title="Club Calendar",
-                        subtitle="Calendar Updated",
-                        message=result.message,
-                    )
+                    # Silent success - menu shows last sync time
                 else:
                     notify(
                         title="Club Calendar",
@@ -802,21 +798,13 @@ def create_app(rumps_module=None, controller=None):
                 notify("Club Calendar", "Error", result.message)
                 return
 
-            notify(
-                "Club Calendar",
-                "Authentication",
-                "Complete authentication in your browser...",
-            )
-
             # Run OAuth server in background thread
             def handle_oauth():
                 oauth_result = run_oauth_server(self.controller)
                 self._update_menu()
-                notify(
-                    "Club Calendar",
-                    "Authentication" if oauth_result.success else "Error",
-                    oauth_result.message,
-                )
+                # Only notify on error - success is visible in menu
+                if not oauth_result.success:
+                    notify("Club Calendar", "Authentication Failed", oauth_result.message)
 
             Thread(target=handle_oauth, daemon=True).start()
 
@@ -824,11 +812,7 @@ def create_app(rumps_module=None, controller=None):
             """Reload settings and update menu."""
             self.controller.reload_settings()
             self._update_menu()
-            notify(
-                title="Club Calendar",
-                subtitle="Settings Reloaded",
-                message="Configuration updated",
-            )
+            # Silent - menu update is enough
 
         def edit_config(self, _) -> None:
             """Open config file in default editor."""
@@ -837,26 +821,17 @@ def create_app(rumps_module=None, controller=None):
         def toggle_login(self, sender) -> None:
             """Toggle start at login setting."""
             if self.controller.is_login_enabled():
-                result = self.controller.disable_login()
+                self.controller.disable_login()
             else:
-                result = self.controller.enable_login()
-
+                self.controller.enable_login()
             self._update_menu()
-            notify(
-                title="Club Calendar",
-                subtitle="Start at Login",
-                message=result.message,
-            )
+            # Silent - menu checkmark shows state
 
         def set_sync_interval(self, minutes: int) -> None:
             """Set the sync interval."""
-            result = self.controller.set_sync_interval(minutes)
+            self.controller.set_sync_interval(minutes)
             self._update_menu()
-            notify(
-                title="Club Calendar",
-                subtitle="Sync Interval",
-                message=result.message,
-            )
+            # Silent - menu checkmark shows selected interval
 
         def view_logs(self, _) -> None:
             """Open log file."""
