@@ -668,7 +668,6 @@ def create_app(rumps_module=None, controller=None):
             if self.controller.is_ready():
                 # Main actions
                 self.menu.add(rumps.MenuItem("Sync Now", callback=self.sync_now))
-                self.menu.add(rumps.MenuItem("Open Calendar", callback=self.open_calendar))
                 self.menu.add(rumps.separator)
 
                 # Status
@@ -699,7 +698,6 @@ def create_app(rumps_module=None, controller=None):
                 self.menu.add(interval_menu)
 
                 self.menu.add(rumps.MenuItem("Edit Config...", callback=self.edit_config))
-                self.menu.add(rumps.MenuItem("Validate Setup...", callback=self.validate_setup))
             elif not self.controller.settings.has_strava_credentials():
                 # Step 1: Need credentials - click opens config
                 self.menu.add(
@@ -722,7 +720,17 @@ def create_app(rumps_module=None, controller=None):
             self.menu.add(login_item)
 
         def sync_now(self, _) -> None:
-            """Run sync command."""
+            """Run sync command with pre-validation."""
+            # Validate calendar access first
+            cal_ok, cal_msg = self.controller.validate_calendar_access()
+            if not cal_ok:
+                notify(
+                    title="Club Calendar",
+                    subtitle="Calendar Error",
+                    message=cal_msg,
+                )
+                return
+
             result = self.controller.run_sync()
             if result.success:
                 self._update_menu()
@@ -743,6 +751,18 @@ def create_app(rumps_module=None, controller=None):
             """Automatically sync in the background based on configured interval."""
             if self.controller.should_auto_sync():
                 logger.info("Running auto-sync...")
+
+                # Validate calendar access first
+                cal_ok, cal_msg = self.controller.validate_calendar_access()
+                if not cal_ok:
+                    logger.warning(f"Auto-sync skipped: {cal_msg}")
+                    notify(
+                        title="Club Calendar",
+                        subtitle="Calendar Error",
+                        message=cal_msg,
+                    )
+                    return
+
                 result = self.controller.run_sync()
                 if result.success:
                     self._update_menu()
@@ -756,12 +776,6 @@ def create_app(rumps_module=None, controller=None):
                         subtitle="Auto-sync failed",
                         message=result.message,
                     )
-
-        def open_calendar(self, _) -> None:
-            """Open the Apple Calendar app."""
-            import subprocess
-
-            subprocess.run(["open", "-a", "Calendar"])
 
         def run_auth(self, _) -> None:
             """Run OAuth authentication flow."""
@@ -838,35 +852,6 @@ def create_app(rumps_module=None, controller=None):
         def view_logs(self, _) -> None:
             """Open log file."""
             self.controller.view_logs()
-
-        def validate_setup(self, _) -> None:
-            """Validate Strava and Calendar connections."""
-            notify(
-                "Club Calendar",
-                "Validating...",
-                "Checking Strava and Calendar access",
-            )
-
-            results = self.controller.validate_all()
-            all_ok = all(ok for _, ok, _ in results)
-
-            if all_ok:
-                messages = [f"✓ {name}: {msg}" for name, ok, msg in results]
-                notify(
-                    "Club Calendar",
-                    "Setup Valid",
-                    " | ".join(messages),
-                )
-            else:
-                # Show first failure
-                for name, ok, msg in results:
-                    if not ok:
-                        notify(
-                            "Club Calendar",
-                            f"{name} Error",
-                            msg,
-                        )
-                        break
 
         def quit_app(self, _) -> None:
             """Quit the application."""
