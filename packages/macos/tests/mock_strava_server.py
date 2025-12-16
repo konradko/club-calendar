@@ -41,17 +41,29 @@ EVENT_TEMPLATES = {
 }
 
 
+# Event schedules by activity type: list of (hour, days_ahead) tuples
+EVENT_SCHEDULES = {
+    "Ride": [(18, 0), (18, 8)],  # Today evening, next week
+    "Run": [(7, 1), (9, 9)],  # Tomorrow morning, next week
+    "Swim": [(7, 0), (19, 10)],  # Today/tomorrow morning, next week
+    "Hike": [(10, 1), (14, 3), (9, 11)],  # Tomorrow, later this week, next week
+}
+
+
+def _future_time(now: datetime, hour: int, days_ahead: int = 0) -> datetime:
+    """Create a future datetime at the given hour, days ahead from now."""
+    dt = (now + timedelta(days=days_ahead)).replace(hour=hour, minute=0, second=0, microsecond=0)
+    # If the time is in the past, move to next day
+    if dt <= now:
+        dt += timedelta(days=1)
+    return dt
+
+
 def _generate_events_for_club(club_id: int, clubs: list[dict] | None = None) -> list[dict]:
     """Generate dynamic events for a club.
 
     Uses club_id as seed for reproducible randomness.
-    Generates: 1-2 events this week, 1 next week, 1 week after.
-
-    Args:
-        club_id: The club ID to generate events for
-        clubs: Optional list of club dicts to look up name from
     """
-    # Seed random with club_id for reproducibility
     rng = random.Random(club_id)
 
     # Determine activity type based on club_id
@@ -61,134 +73,25 @@ def _generate_events_for_club(club_id: int, clubs: list[dict] | None = None) -> 
 
     # Get club name from provided clubs or defaults
     club_name = f"Club {club_id}"
-    all_clubs = (clubs or []) + DEFAULT_CLUBS
-    for club in all_clubs:
+    for club in (clubs or []) + DEFAULT_CLUBS:
         if club["id"] == club_id:
             club_name = club["name"]
             break
 
-    events = []
-    event_id_base = club_id * 100
     now = datetime.now(UTC)
+    schedule = EVENT_SCHEDULES.get(activity_type, [(18, 1), (10, 8)])
 
-    # Generate specific events based on activity type for a cleaner test dataset:
-    # - Today: 1 swim (7am), 1 ride (+3h) = 2 total
-    # - Tomorrow: 1 run (7am), 1 hike (10am) = 2 total
-    # - Next week: 1 of each type
-
-    if activity_type == "Ride":
-        # Ride: later today + next week
-        event_dt = (now + timedelta(hours=3)).replace(minute=0, second=0, microsecond=0)
-        events.append(
-            _create_event(
-                event_id=event_id_base,
-                title=rng.choice(titles),
-                club_id=club_id,
-                club_name=club_name,
-                activity_type=activity_type,
-                event_dt=event_dt,
-            )
+    return [
+        _create_event(
+            event_id=club_id * 100 + i,
+            title=rng.choice(titles),
+            club_id=club_id,
+            club_name=club_name,
+            activity_type=activity_type,
+            event_dt=_future_time(now, hour, days),
         )
-        event_dt = (now + timedelta(days=8)).replace(hour=18, minute=0, second=0, microsecond=0)
-        events.append(
-            _create_event(
-                event_id=event_id_base + 1,
-                title=rng.choice(titles),
-                club_id=club_id,
-                club_name=club_name,
-                activity_type=activity_type,
-                event_dt=event_dt,
-            )
-        )
-
-    elif activity_type == "Run":
-        # Run: tomorrow + next week
-        event_dt = (now + timedelta(days=1)).replace(hour=7, minute=0, second=0, microsecond=0)
-        events.append(
-            _create_event(
-                event_id=event_id_base,
-                title=rng.choice(titles),
-                club_id=club_id,
-                club_name=club_name,
-                activity_type=activity_type,
-                event_dt=event_dt,
-            )
-        )
-        event_dt = (now + timedelta(days=9)).replace(hour=9, minute=0, second=0, microsecond=0)
-        events.append(
-            _create_event(
-                event_id=event_id_base + 1,
-                title=rng.choice(titles),
-                club_id=club_id,
-                club_name=club_name,
-                activity_type=activity_type,
-                event_dt=event_dt,
-            )
-        )
-
-    elif activity_type == "Swim":
-        # Swim: earlier today + next week
-        event_dt = now.replace(hour=7, minute=0, second=0, microsecond=0)
-        events.append(
-            _create_event(
-                event_id=event_id_base,
-                title=rng.choice(titles),
-                club_id=club_id,
-                club_name=club_name,
-                activity_type=activity_type,
-                event_dt=event_dt,
-            )
-        )
-        event_dt = (now + timedelta(days=10)).replace(hour=19, minute=0, second=0, microsecond=0)
-        events.append(
-            _create_event(
-                event_id=event_id_base + 1,
-                title=rng.choice(titles),
-                club_id=club_id,
-                club_name=club_name,
-                activity_type=activity_type,
-                event_dt=event_dt,
-            )
-        )
-
-    elif activity_type == "Hike":
-        # Hike: tomorrow + later this week + next week
-        event_dt = (now + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
-        events.append(
-            _create_event(
-                event_id=event_id_base,
-                title=rng.choice(titles),
-                club_id=club_id,
-                club_name=club_name,
-                activity_type=activity_type,
-                event_dt=event_dt,
-            )
-        )
-        # Later this week (3 days from now)
-        event_dt = (now + timedelta(days=3)).replace(hour=14, minute=0, second=0, microsecond=0)
-        events.append(
-            _create_event(
-                event_id=event_id_base + 1,
-                title=rng.choice(titles),
-                club_id=club_id,
-                club_name=club_name,
-                activity_type=activity_type,
-                event_dt=event_dt,
-            )
-        )
-        event_dt = (now + timedelta(days=11)).replace(hour=9, minute=0, second=0, microsecond=0)
-        events.append(
-            _create_event(
-                event_id=event_id_base + 2,
-                title=rng.choice(titles),
-                club_id=club_id,
-                club_name=club_name,
-                activity_type=activity_type,
-                event_dt=event_dt,
-            )
-        )
-
-    return events
+        for i, (hour, days) in enumerate(schedule)
+    ]
 
 
 def _create_event(
@@ -295,7 +198,8 @@ class MockStravaHandler(BaseHTTPRequestHandler):
         if content_length:
             self.rfile.read(content_length)
 
-        if self.path == "/oauth/token":
+        # Accept both /oauth/token and /api/v3/oauth/token for flexibility
+        if self.path in ("/oauth/token", "/api/v3/oauth/token"):
             athlete = DEFAULT_ATHLETE
             if self.scenario_data:
                 athlete = self.scenario_data.get("athlete", DEFAULT_ATHLETE)
@@ -360,12 +264,17 @@ def main():
         print(f"[Mock Strava] Dynamic mode with clubs: {', '.join(club_names)}")
 
     mode = "scenario" if args.data else "dynamic"
+    base_url = f"http://localhost:{args.port}"
+    api_url = f"{base_url}/api/v3"
     print(f"""
 ╔═══════════════════════════════════════════════════════════════╗
 ║                    Mock Strava API Server                      ║
 ╠═══════════════════════════════════════════════════════════════╣
-║  Port: {args.port:<56}║
-║  Mode: {mode:<56}║
+║  API URL: {api_url:<52}║
+║  Mode:    {mode:<52}║
+╠═══════════════════════════════════════════════════════════════╣
+║  Set in config.yaml:                                           ║
+║    strava_api_base: "{api_url}"            ║
 ╠═══════════════════════════════════════════════════════════════╣
 ║  Endpoints:                                                    ║
 ║    GET  /api/v3/athlete              - Get athlete             ║

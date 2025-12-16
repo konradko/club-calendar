@@ -976,10 +976,10 @@ def create_app(rumps_module=None, controller=None):
                 current_interval = self.controller.get_sync_interval()
                 for minutes, label in [
                     (0, "Disabled"),
-                    (15, "15 min"),
                     (30, "30 min"),
                     (60, "1 hour"),
                     (120, "2 hours"),
+                    (240, "4 hours"),
                 ]:
                     item = rumps.MenuItem(
                         label, callback=lambda _, m=minutes: self.set_sync_interval(m)

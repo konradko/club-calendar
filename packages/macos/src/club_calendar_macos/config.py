@@ -253,6 +253,9 @@ oauth_callback_port: {self.oauth_callback_port}
 {cities_block}
 
 {clubs_block}
+
+# Dev settings (leave empty for production)
+strava_api_base: "{self.strava_api_base}"  # e.g. http://localhost:51679/api/v3
 """
         get_config_file().write_text(content)
 
@@ -330,6 +333,9 @@ oauth_callback_port: {self.oauth_callback_port}
         calendar_name = config.get("calendar_name", "Club Calendar")
         oauth_callback_port = config.get("oauth_callback_port", 51678)
 
+        # Dev settings (env var takes precedence)
+        strava_api_base = os.environ.get("STRAVA_API_BASE") or config.get("strava_api_base", "")
+
         # Schema version (default to 0 for old unversioned configs)
         schema_version = config.get("schema_version", 0)
 
@@ -346,6 +352,7 @@ oauth_callback_port: {self.oauth_callback_port}
             max_menu_events=max_menu_events,
             calendar_name=calendar_name,
             oauth_callback_port=oauth_callback_port,
+            strava_api_base=strava_api_base,
         )
 
         # Auto-upgrade config if schema version is older

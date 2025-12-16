@@ -187,6 +187,22 @@ class TestMenuBarController:
         assert message == "Ready to sync (will fetch clubs)"
         assert is_valid is True
 
+    def test_get_config_status_clubs_none_enabled(self, mock_settings):
+        """Test config status when clubs exist but none are enabled."""
+        mock_settings.has_strava_credentials.return_value = True
+        mock_settings.has_refresh_token.return_value = True
+        mock_settings.get_club_ids.return_value = []
+        mock_settings.clubs = {
+            "1": {"name": "Club A", "city": "Portland", "enabled": False},
+            "2": {"name": "Club B", "city": "Seattle", "enabled": False},
+        }
+        controller = MenuBarController(settings=mock_settings)
+
+        message, is_valid = controller.get_config_status()
+
+        assert message == "2 clubs (none enabled)"
+        assert is_valid is True
+
     def test_get_config_status_valid(self, mock_settings):
         """Test config status when fully configured."""
         mock_settings.cities = ["Portland"]
@@ -234,6 +250,96 @@ class TestMenuBarController:
         # Only credentials and auth matter now, not clubs
         mock_settings.has_refresh_token.return_value = False
         assert controller.is_ready() is False
+
+    def test_validate_strava_access_missing_credentials(self, mock_settings):
+        """Test validate_strava_access when credentials missing."""
+        mock_settings.has_strava_credentials.return_value = False
+        controller = MenuBarController(settings=mock_settings)
+
+        success, message = controller.validate_strava_access()
+
+        assert success is False
+        assert message == "Missing Strava credentials"
+
+    def test_validate_strava_access_not_authenticated(self, mock_settings):
+        """Test validate_strava_access when not authenticated."""
+        mock_settings.has_strava_credentials.return_value = True
+        mock_settings.has_refresh_token.return_value = False
+        controller = MenuBarController(settings=mock_settings)
+
+        success, message = controller.validate_strava_access()
+
+        assert success is False
+        assert message == "Not authenticated with Strava"
+
+    def test_validate_strava_access_api_error(self, mock_settings, mock_strava_api):
+        """Test validate_strava_access when API returns error."""
+        from club_calendar_core.strava import StravaError
+
+        controller = MenuBarController(settings=mock_settings)
+        error = StravaError("API error 401: Unauthorized")
+        with patch.object(controller.service, "get_clubs", side_effect=error):
+            success, message = controller.validate_strava_access()
+
+        assert success is False
+        assert "Strava error:" in message
+        assert "API error 401" in message
+
+    def test_validate_strava_access_success(self, mock_settings, mock_strava_api):
+        """Test validate_strava_access with successful API call."""
+        controller = MenuBarController(settings=mock_settings)
+        with patch.object(controller.service, "get_clubs", return_value=[{"id": 1}, {"id": 2}]):
+            success, message = controller.validate_strava_access()
+
+        assert success is True
+        assert message == "Connected (2 clubs)"
+
+    def test_validate_calendar_access_granted(self, mock_settings):
+        """Test validate_calendar_access when access is granted."""
+        controller = MenuBarController(settings=mock_settings)
+        target = "club_calendar_macos.eventkit.request_calendar_access"
+        with patch(target, return_value=(True, None)):
+            success, message = controller.validate_calendar_access()
+
+        assert success is True
+        assert message == "Calendar access granted"
+
+    def test_validate_calendar_access_denied(self, mock_settings):
+        """Test validate_calendar_access when access is denied."""
+        controller = MenuBarController(settings=mock_settings)
+        target = "club_calendar_macos.eventkit.request_calendar_access"
+        with patch(target, return_value=(False, "Permission denied")):
+            success, message = controller.validate_calendar_access()
+
+        assert success is False
+        assert message == "Permission denied"
+
+    def test_validate_calendar_access_error(self, mock_settings):
+        """Test validate_calendar_access when exception occurs."""
+        controller = MenuBarController(settings=mock_settings)
+        target = "club_calendar_macos.eventkit.request_calendar_access"
+        with patch(target, side_effect=Exception("EventKit error")):
+            success, message = controller.validate_calendar_access()
+
+        assert success is False
+        assert "Calendar error:" in message
+        assert "EventKit error" in message
+
+    def test_validate_all(self, mock_settings):
+        """Test validate_all returns all validation results."""
+        controller = MenuBarController(settings=mock_settings)
+        strava_mock = patch.object(
+            controller, "validate_strava_access", return_value=(True, "Strava OK")
+        )
+        calendar_mock = patch.object(
+            controller, "validate_calendar_access", return_value=(False, "Denied")
+        )
+        with strava_mock, calendar_mock:
+            results = controller.validate_all()
+
+        assert len(results) == 2
+        assert results[0] == ("Strava", True, "Strava OK")
+        assert results[1] == ("Calendar", False, "Denied")
 
     def test_run_sync_success(self, mock_settings, mock_strava_api):
         """Test successful sync with HTTP mocks."""
@@ -1377,6 +1483,84 @@ class TestMain:
             mock_app.run.assert_called_once()
 
 
+class TestGetEventEmoji:
+    """Tests for _get_event_emoji method."""
+
+    def test_emoji_from_activity_type_ride(self, mock_rumps, mock_settings):
+        """Test ride emoji from activity type."""
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        assert app._get_event_emoji("Event", "Ride") == "🚴"
+        assert app._get_event_emoji("Event", "Cycling") == "🚴"
+
+    def test_emoji_from_activity_type_run(self, mock_rumps, mock_settings):
+        """Test run emoji from activity type."""
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        assert app._get_event_emoji("Event", "Run") == "🏃"
+
+    def test_emoji_from_activity_type_swim(self, mock_rumps, mock_settings):
+        """Test swim emoji from activity type."""
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        assert app._get_event_emoji("Event", "Swim") == "🏊"
+
+    def test_emoji_from_activity_type_hike(self, mock_rumps, mock_settings):
+        """Test hike/walk emoji from activity type."""
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        assert app._get_event_emoji("Event", "Hike") == "🥾"
+        assert app._get_event_emoji("Event", "Walk") == "🥾"
+
+    def test_emoji_from_title_ride(self, mock_rumps, mock_settings):
+        """Test ride emoji from title fallback."""
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        assert app._get_event_emoji("Saturday Ride", None) == "🚴"
+        assert app._get_event_emoji("Cycling Club", None) == "🚴"
+        assert app._get_event_emoji("Bike to Work", None) == "🚴"
+        assert app._get_event_emoji("Weekly Cycle", None) == "🚴"
+
+    def test_emoji_from_title_run(self, mock_rumps, mock_settings):
+        """Test run emoji from title fallback."""
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        assert app._get_event_emoji("Morning Run", None) == "🏃"
+        assert app._get_event_emoji("Running Club", None) == "🏃"
+        assert app._get_event_emoji("Easy Jog", None) == "🏃"
+
+    def test_emoji_from_title_swim(self, mock_rumps, mock_settings):
+        """Test swim emoji from title fallback."""
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        assert app._get_event_emoji("Pool Swim", None) == "🏊"
+        assert app._get_event_emoji("Swimming Session", None) == "🏊"
+
+    def test_emoji_from_title_hike(self, mock_rumps, mock_settings):
+        """Test hike/walk emoji from title fallback."""
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        assert app._get_event_emoji("Trail Hike", None) == "🥾"
+        assert app._get_event_emoji("Hiking Group", None) == "🥾"
+        assert app._get_event_emoji("Evening Walk", None) == "🥾"
+
+    def test_emoji_default(self, mock_rumps, mock_settings):
+        """Test default calendar emoji."""
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        assert app._get_event_emoji("Club Meeting", None) == "📅"
+        assert app._get_event_emoji("Social Event", "") == "📅"
+
+
 class TestGetUpcomingEvents:
     """Tests for get_upcoming_events method."""
 
@@ -1614,8 +1798,9 @@ class TestDayLabelAndMenuFiltering:
 
         controller = MenuBarController(settings=mock_settings)
 
+        # Use fixed datetime 8 days in the future at noon to avoid timezone edge cases
         now = datetime.now(UTC)
-        next_week_dt = now + timedelta(days=8)
+        next_week_dt = (now + timedelta(days=8)).replace(hour=12, minute=0, second=0, microsecond=0)
         controller.last_events = [
             ClubEvent(
                 id=1,
@@ -1638,6 +1823,6 @@ class TestDayLabelAndMenuFiltering:
         calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
         calls_str = " ".join(calls)
 
-        # Should show day header like "24 Dec (Wed):"
+        # Should show day header like "25 Dec (Thu):"
         expected_header = f"{next_week_dt.strftime('%d %b')} ({next_week_dt.strftime('%a')}):"
         assert expected_header in calls_str

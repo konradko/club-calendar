@@ -1,5 +1,6 @@
 .PHONY: install test test-core test-cli test-macos pre-commit menubar-icons menubar-dmg menubar-dev \
-	menubar-dev-mock menubar-dev-mock-strava menubar-dev-mock-strava-updated menubar-dev-mock-strava-all-deleted
+	menubar-dev-mock menubar-dev-mock-strava menubar-dev-mock-strava-updated menubar-dev-mock-strava-all-deleted \
+	mock-strava
 
 # Install dependencies and set up pre-commit hooks
 install:
@@ -23,7 +24,7 @@ test-macos:
 pre-commit:
 	uv run pre-commit run --all-files
 
-# Build menu bar icons from icon.png
+# Build menu bar icons from icon.svg
 menubar-icons:
 	./deploy/macos-menubar/build-icons.sh
 
@@ -101,3 +102,17 @@ menubar-dev-mock-strava-updated:
 
 menubar-dev-mock-strava-all-deleted:
 	$(call run-mock-strava,all-deleted)
+
+# Run mock Strava server standalone (foreground, dynamic mode by default)
+# Usage: make mock-strava [SCENARIO=happy|updated|all-deleted]
+mock-strava:
+	@pkill -f "mock_strava_server.py" 2>/dev/null || true
+	@sleep 0.5
+ifdef SCENARIO
+	@echo "Starting mock Strava server on port $(MOCK_PORT) with $(SCENARIO).json..."
+	.venv/bin/python packages/macos/tests/mock_strava_server.py \
+		--port $(MOCK_PORT) --data $(SCENARIOS_DIR)/$(SCENARIO).json
+else
+	@echo "Starting mock Strava server on port $(MOCK_PORT) in dynamic mode..."
+	.venv/bin/python packages/macos/tests/mock_strava_server.py --port $(MOCK_PORT)
+endif

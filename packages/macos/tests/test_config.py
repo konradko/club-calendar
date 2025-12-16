@@ -29,6 +29,16 @@ class TestConfigFunctions:
         assert result == expected
         assert result.exists()
 
+    def test_get_config_dir_uses_env_var(self, tmp_path, monkeypatch):
+        """Test get_config_dir uses CLUB_CALENDAR_CONFIG_DIR env var."""
+        custom_dir = tmp_path / "custom_config"
+        monkeypatch.setenv("CLUB_CALENDAR_CONFIG_DIR", str(custom_dir))
+
+        result = get_config_dir()
+
+        assert result == custom_dir
+        assert result.exists()
+
     def test_get_logs_dir_creates_directory(self, tmp_path):
         """Test get_logs_dir creates the directory."""
         fake_home = tmp_path / "home"
@@ -116,6 +126,26 @@ class TestSettingsClass:
         settings = Settings.load()
         assert settings.strava_client_id == ""
         assert settings.clubs == {}
+
+    def test_settings_empty_config_file(self, mock_config_file):
+        """Test loading handles empty config file gracefully."""
+        mock_config_file.write_text("")
+
+        settings = Settings.load()
+
+        # Should create fresh defaults
+        assert settings.strava_client_id == ""
+        assert settings.clubs == {}
+        assert settings.sync_interval_minutes == 60
+
+    def test_settings_sync_interval_env_var(self, mock_config_file, monkeypatch):
+        """Test SYNC_INTERVAL_MINUTES env var overrides config."""
+        mock_config_file.write_text("sync_interval_minutes: 30")
+        monkeypatch.setenv("SYNC_INTERVAL_MINUTES", "120")
+
+        settings = Settings.load()
+
+        assert settings.sync_interval_minutes == 120
 
     def test_get_settings_function(self):
         """Test get_settings convenience function."""
