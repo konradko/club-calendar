@@ -50,6 +50,3 @@ packages/macos/tests/test-config/
 
 # macOS
 .DS_Store
-
-# Claude
-.claude/
