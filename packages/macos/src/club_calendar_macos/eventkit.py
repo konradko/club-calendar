@@ -134,13 +134,19 @@ def _create_event(store, calendar, club_event: ClubEvent):
     end_date = start_date + timedelta(hours=2)
 
     # Convert to NSDate
-    from Foundation import NSDate
+    from Foundation import NSDate, NSTimeZone
 
     start_ns = NSDate.dateWithTimeIntervalSince1970_(start_date.timestamp())
     end_ns = NSDate.dateWithTimeIntervalSince1970_(end_date.timestamp())
 
     event.setStartDate_(start_ns)
     event.setEndDate_(end_ns)
+
+    # Set timezone from event if available (e.g., "Europe/Warsaw")
+    if club_event.zone:
+        tz = NSTimeZone.timeZoneWithName_(club_event.zone)
+        if tz:
+            event.setTimeZone_(tz)
 
     # Build description
     description_parts = []
@@ -306,7 +312,7 @@ def _update_event(event, club_event: ClubEvent):
     """Update an existing EventKit event from a ClubEvent."""
     from datetime import timedelta
 
-    from Foundation import NSDate
+    from Foundation import NSDate, NSTimeZone
 
     event.setTitle_(club_event.title)
 
@@ -317,6 +323,12 @@ def _update_event(event, club_event: ClubEvent):
     end_ns = NSDate.dateWithTimeIntervalSince1970_(end_date.timestamp())
     event.setStartDate_(start_ns)
     event.setEndDate_(end_ns)
+
+    # Update timezone if available
+    if club_event.zone:
+        tz = NSTimeZone.timeZoneWithName_(club_event.zone)
+        if tz:
+            event.setTimeZone_(tz)
 
     # Update location
     if club_event.address:

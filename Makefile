@@ -11,13 +11,13 @@ install:
 test: test-core test-cli test-macos
 
 test-core:
-	uv run pytest packages/core/tests/ --cov=club_calendar_core --cov-report=term-missing
+	uv run pytest packages/core/tests/ -q --tb=short --cov=club_calendar_core --cov-report=term-missing
 
 test-cli:
-	uv run pytest packages/cli/tests/ --cov=club_calendar_cli --cov-report=term-missing
+	uv run pytest packages/cli/tests/ -q --tb=short --cov=club_calendar_cli --cov-report=term-missing
 
 test-macos:
-	uv run pytest packages/macos/tests/ --cov=club_calendar_macos --cov-report=term-missing
+	uv run pytest packages/macos/tests/ -q --tb=short --cov=club_calendar_macos --cov-report=term-missing
 
 # Run all pre-commit hooks manually
 pre-commit:

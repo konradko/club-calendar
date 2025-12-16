@@ -56,7 +56,11 @@ class Club:
 
 @dataclass
 class ClubEvent:
-    """Strava club event."""
+    """Strava club event.
+
+    Fields from Strava API:
+    https://developers.strava.com/playground/
+    """
 
     id: int
     title: str
@@ -67,7 +71,11 @@ class ClubEvent:
     address: str | None
     route_id: int | None
     organizer_name: str | None
-    activity_type: str | None = None  # e.g., "Ride", "Run" if available from API
+    activity_type: str | None = None  # e.g., "Ride", "Run"
+    zone: str | None = None  # Timezone, e.g., "Europe/Warsaw"
+    women_only: bool = False
+    private: bool = False
+    start_latlng: tuple[float, float] | None = None  # (lat, lng) coordinates
 
 
 class StravaClient:
@@ -242,6 +250,10 @@ class StravaClient:
             organizer_data = event.get("organizing_athlete") or {}
             organizer_name = organizer_data.get("firstname")
 
+            # Parse coordinates if available
+            latlng = event.get("start_latlng")
+            start_latlng = tuple(latlng) if latlng and len(latlng) == 2 else None
+
             events.append(
                 ClubEvent(
                     id=event["id"],
@@ -254,6 +266,10 @@ class StravaClient:
                     route_id=event.get("route_id"),
                     organizer_name=organizer_name,
                     activity_type=event.get("activity_type") or event.get("sport_type"),
+                    zone=event.get("zone"),
+                    women_only=event.get("women_only", False),
+                    private=event.get("private", False),
+                    start_latlng=start_latlng,
                 )
             )
         return events
