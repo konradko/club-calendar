@@ -67,6 +67,7 @@ class ClubEvent:
     address: str | None
     route_id: int | None
     organizer_name: str | None
+    activity_type: str | None = None  # e.g., "Ride", "Run" if available from API
 
 
 class StravaClient:
@@ -106,7 +107,7 @@ class StravaClient:
     def __enter__(self) -> "StravaClient":
         return self
 
-    def __exit__(self, *args: Any) -> None:
+    def __exit__(self, *_: Any) -> None:
         self.close()
 
     def get_authorization_url(self, redirect_uri: str = "http://localhost:8000/callback") -> str:
@@ -252,6 +253,7 @@ class StravaClient:
                     address=event.get("address"),
                     route_id=event.get("route_id"),
                     organizer_name=organizer_name,
+                    activity_type=event.get("activity_type") or event.get("sport_type"),
                 )
             )
         return events

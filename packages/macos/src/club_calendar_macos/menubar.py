@@ -693,36 +693,67 @@ def create_app(rumps_module=None, controller=None):
             self.controller = controller
             self._update_menu()
 
+        def _get_event_emoji(self, title: str, activity_type: str | None = None) -> str:
+            """Get emoji for event based on activity type or title keywords.
+
+            Args:
+                title: Event title (used as fallback)
+                activity_type: Strava activity type (e.g., "Ride", "Run") from API
+            """
+            # Check API-provided activity_type first
+            if activity_type:
+                activity_lower = activity_type.lower()
+                if "ride" in activity_lower or "cycling" in activity_lower:
+                    return "🚴"
+                if "run" in activity_lower:
+                    return "🏃"
+                if "swim" in activity_lower:
+                    return "🏊"
+                if "hike" in activity_lower or "walk" in activity_lower:
+                    return "🥾"
+
+            # Fall back to title-based detection
+            title_lower = title.lower()
+            if any(w in title_lower for w in ["ride", "cycling", "cycle", "bike"]):
+                return "🚴"
+            if any(w in title_lower for w in ["run", "running", "jog"]):
+                return "🏃"
+            if any(w in title_lower for w in ["swim", "swimming"]):
+                return "🏊"
+            if any(w in title_lower for w in ["hike", "hiking", "walk"]):
+                return "🥾"
+            return "📅"
+
         def _update_menu(self) -> None:
             """Update menu items based on current state."""
             self.menu.clear()
 
             if self.controller.is_ready():
+                # Upcoming events (at the top)
+                upcoming = self.controller.get_upcoming_events(limit=7)
+                if upcoming:
+                    for event in upcoming:
+                        # Format: "🚴 Mon 16 Dec 14:00 - Event Title"
+                        dt = event.start_datetime.astimezone()
+                        date_str = dt.strftime("%a %d %b %H:%M")
+                        # Truncate title if too long
+                        title = event.title[:30] + "..." if len(event.title) > 30 else event.title
+                        # Emoji based on activity type (API) or title keywords (fallback)
+                        emoji = self._get_event_emoji(event.title, event.activity_type)
+                        label = f"{emoji} {date_str} - {title}"
+                        item = rumps.MenuItem(
+                            label,
+                            callback=lambda _, e=event: self.open_event(e),
+                        )
+                        self.menu.add(item)
+                    self.menu.add(rumps.separator)
+
                 # Main actions
                 self.menu.add(rumps.MenuItem("Sync Now", callback=self.sync_now))
                 self.menu.add(rumps.separator)
 
                 # Status
                 self.menu.add(rumps.MenuItem(self.controller.get_status_text(), callback=None))
-
-                # Upcoming events
-                upcoming = self.controller.get_upcoming_events(limit=7)
-                if upcoming:
-                    self.menu.add(rumps.separator)
-                    self.menu.add(rumps.MenuItem("Upcoming Events:", callback=None))
-                    for event in upcoming:
-                        # Format: "Mon 16 Dec 14:00 - Event Title"
-                        dt = event.start_datetime.astimezone()
-                        date_str = dt.strftime("%a %d %b %H:%M")
-                        # Truncate title if too long
-                        title = event.title[:30] + "..." if len(event.title) > 30 else event.title
-                        label = f"  {date_str} - {title}"
-                        item = rumps.MenuItem(
-                            label,
-                            callback=lambda _, e=event: self.open_event(e),
-                        )
-                        self.menu.add(item)
-
                 self.menu.add(rumps.separator)
 
                 # Sync interval
