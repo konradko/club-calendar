@@ -1173,18 +1173,6 @@ class TestCreateApp:
             mock_sync.assert_not_called()
             mock_rumps.notification.assert_not_called()
 
-    def test_create_app_reload_settings(self, mock_rumps, mock_settings):
-        """Test reload_settings callback - silent, no notification."""
-        controller = MenuBarController(settings=mock_settings)
-
-        with patch.object(controller, "reload_settings") as mock_reload:
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.reload_settings(None)
-
-            mock_reload.assert_called_once()
-            # Silent - menu update is enough
-            mock_rumps.notification.assert_not_called()
-
     def test_create_app_update_menu_ready(self, mock_rumps, mock_settings):
         """Test _update_menu when app is ready shows sync options."""
         controller = MenuBarController(settings=mock_settings)
@@ -1197,7 +1185,7 @@ class TestCreateApp:
         assert any("Sync Now" in str(c) for c in calls)
 
     def test_create_app_update_menu_not_ready(self, mock_rumps, mock_settings):
-        """Test _update_menu when missing creds shows warning and Reload Settings."""
+        """Test _update_menu when missing creds shows setup prompt."""
         # Not ready means missing credentials (clubs are auto-fetched now)
         mock_settings.has_strava_credentials.return_value = False
         controller = MenuBarController(settings=mock_settings)
@@ -1208,7 +1196,6 @@ class TestCreateApp:
 
         calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
         assert any("⚙️" in str(c) for c in calls)
-        assert any("Reload Settings" in str(c) for c in calls)
 
     def test_create_app_update_menu_valid_config(self, mock_rumps, mock_settings):
         """Test _update_menu with valid config shows Sync Now and Edit Config."""
@@ -1247,7 +1234,6 @@ class TestCreateApp:
         calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
         assert any("🔗" in str(c) for c in calls)
         assert any("Edit Config" in str(c) for c in calls)
-        assert any("Reload Settings" in str(c) for c in calls)
 
     def test_create_app_uses_default_controller(self, mock_rumps):
         """Test create_app creates controller if not provided."""

@@ -708,7 +708,6 @@ def create_app(rumps_module=None, controller=None):
                 self.menu.add(
                     rumps.MenuItem("⚙️ Set Strava Credentials...", callback=self.edit_config)
                 )
-                self.menu.add(rumps.MenuItem("Reload Settings", callback=self.reload_settings))
             else:
                 # Step 2: Have credentials, need auth - click starts OAuth
                 self.menu.add(
@@ -716,7 +715,6 @@ def create_app(rumps_module=None, controller=None):
                 )
                 self.menu.add(rumps.separator)
                 self.menu.add(rumps.MenuItem("Edit Config...", callback=self.edit_config))
-                self.menu.add(rumps.MenuItem("Reload Settings", callback=self.reload_settings))
 
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("View Logs...", callback=self.view_logs))
@@ -812,12 +810,6 @@ def create_app(rumps_module=None, controller=None):
                     notify("Club Calendar", "Authentication Failed", oauth_result.message)
 
             Thread(target=handle_oauth, daemon=True).start()
-
-        def reload_settings(self, _) -> None:
-            """Reload settings and update menu."""
-            self.controller.reload_settings()
-            self._update_menu()
-            # Silent - menu update is enough
 
         def edit_config(self, _) -> None:
             """Open config file in default editor."""
