@@ -65,6 +65,7 @@ class ClubCalendarService:
         client_secret: str,
         refresh_token: str | None = None,
         token_store: TokenStore | None = None,
+        api_base_url: str | None = None,
     ):
         """Initialize the service.
 
@@ -73,11 +74,13 @@ class ClubCalendarService:
             client_secret: Strava API client secret
             refresh_token: OAuth refresh token (for simple usage)
             token_store: Token storage backend (for persistent storage)
+            api_base_url: Override Strava API base URL (for testing)
         """
         self.client_id = client_id
         self.client_secret = client_secret
         self._refresh_token = refresh_token
         self._token_store = token_store
+        self._api_base_url = api_base_url
 
     @property
     def refresh_token(self) -> str | None:
@@ -113,6 +116,7 @@ class ClubCalendarService:
             client_id=self.client_id,
             client_secret=self.client_secret,
             refresh_token=token,
+            api_base_url=self._api_base_url,
         )
 
     # =========================================================================

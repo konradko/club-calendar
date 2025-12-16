@@ -100,6 +100,10 @@ class Settings:
 
     # Sync configuration
     sync_interval_minutes: int = 60  # Default: 1 hour
+    sync_on_startup: bool = True  # Sync when app starts
+
+    # Dev: override Strava API base URL (e.g., http://localhost:51679 for mock server)
+    strava_api_base: str = ""
 
     # Calendar settings
     calendar_name: str = "Club Calendar"  # Name of calendar in Apple Calendar

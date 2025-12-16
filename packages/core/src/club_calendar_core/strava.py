@@ -88,6 +88,7 @@ class StravaClient:
         access_token: OAuth access token (optional)
         timeout: Request timeout in seconds (default: 30.0)
         retries: Number of retries for transient failures (default: 3)
+        api_base_url: Override API base URL (for testing with mock server)
     """
 
     def __init__(
@@ -98,12 +99,18 @@ class StravaClient:
         access_token: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
+        api_base_url: str | None = None,
     ):
         self.client_id = client_id
         self.client_secret = client_secret
         self._refresh_token = refresh_token
         self._access_token = access_token
         self._token_expires_at = 0
+        # Allow override for testing
+        self._api_url = api_base_url.rstrip("/") if api_base_url else STRAVA_API_URL
+        self._token_url = (
+            f"{api_base_url.rstrip('/')}/oauth/token" if api_base_url else STRAVA_TOKEN_URL
+        )
         # Use transport with retry for transient network failures
         transport = HTTPTransport(retries=retries)
         self._http = httpx.Client(timeout=timeout, transport=transport)
@@ -132,7 +139,7 @@ class StravaClient:
     def exchange_code(self, code: str) -> TokenResponse:
         """Exchange authorization code for tokens."""
         response = self._http.post(
-            STRAVA_TOKEN_URL,
+            self._token_url,
             data={
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
@@ -157,7 +164,7 @@ class StravaClient:
             raise StravaAuthError("No refresh token available")
 
         response = self._http.post(
-            STRAVA_TOKEN_URL,
+            self._token_url,
             data={
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
@@ -207,7 +214,7 @@ class StravaClient:
         """Make authenticated GET request to Strava API."""
         token = self._ensure_access_token()
         response = self._http.get(
-            f"{STRAVA_API_URL}/{endpoint}",
+            f"{self._api_url}/{endpoint}",
             headers={"Authorization": f"Bearer {token}"},
         )
         self._handle_response_errors(response)

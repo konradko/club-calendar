@@ -37,6 +37,7 @@ def mock_settings(tmp_path):
     mock.max_events_per_club_per_week = 5
     mock.max_menu_events = 15
     mock.sync_interval_minutes = 60
+    mock.strava_api_base = ""
     return mock
 
 

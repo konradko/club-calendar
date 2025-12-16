@@ -1,20 +1,80 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec file for Club Calendar menu bar app."""
 
+import subprocess
+import tempfile
 from pathlib import Path
 
 # Get project root (deploy/macos-dmg -> project root)
 spec_dir = Path(SPECPATH)
 project_root = spec_dir.parent.parent
+source_icon = project_root / "icon.png"
 
 block_cipher = None
 
-# Include template icons in the app bundle
-datas = []
-for icon_file in ["icon_menubarTemplate.png", "icon_menubarTemplate@2x.png"]:
-    icon_path = spec_dir / icon_file
-    if icon_path.exists():
-        datas.append((str(icon_path), "."))
+# Generate icons from high-res source at build time
+def generate_icons():
+    """Generate .icns and menubar template icons from icon.png."""
+    if not source_icon.exists():
+        print(f"WARNING: {source_icon} not found, icons will be missing")
+        return []
+
+    datas = []
+
+    # Generate menubar template icons (22x22 and 44x44)
+    for size, suffix in [(22, ""), (44, "@2x")]:
+        out_path = spec_dir / f"icon_menubarTemplate{suffix}.png"
+        # Resize
+        subprocess.run(
+            ["sips", "-z", str(size), str(size), str(source_icon), "--out", str(out_path)],
+            capture_output=True,
+        )
+        # Convert to black template (menubar icons should be black on transparent)
+        subprocess.run(
+            ["sips", "--setProperty", "format", "png", str(out_path)],
+            capture_output=True,
+        )
+        if out_path.exists():
+            datas.append((str(out_path), "."))
+            print(f"  Generated: {out_path.name} ({size}x{size})")
+
+    # Generate .icns
+    iconset = spec_dir / "icon.iconset"
+    iconset.mkdir(exist_ok=True)
+    sizes = [16, 32, 64, 128, 256, 512, 1024]
+    for size in sizes:
+        out_name = f"icon_{size//2}x{size//2}@2x.png" if size > 16 and size in [32, 64, 256, 512, 1024] else f"icon_{size}x{size}.png"
+        # Handle standard iconset naming
+        if size == 16:
+            subprocess.run(["sips", "-z", "16", "16", str(source_icon), "--out", str(iconset / "icon_16x16.png")], capture_output=True)
+        elif size == 32:
+            subprocess.run(["sips", "-z", "32", "32", str(source_icon), "--out", str(iconset / "icon_16x16@2x.png")], capture_output=True)
+            subprocess.run(["sips", "-z", "32", "32", str(source_icon), "--out", str(iconset / "icon_32x32.png")], capture_output=True)
+        elif size == 64:
+            subprocess.run(["sips", "-z", "64", "64", str(source_icon), "--out", str(iconset / "icon_32x32@2x.png")], capture_output=True)
+        elif size == 128:
+            subprocess.run(["sips", "-z", "128", "128", str(source_icon), "--out", str(iconset / "icon_128x128.png")], capture_output=True)
+        elif size == 256:
+            subprocess.run(["sips", "-z", "256", "256", str(source_icon), "--out", str(iconset / "icon_128x128@2x.png")], capture_output=True)
+            subprocess.run(["sips", "-z", "256", "256", str(source_icon), "--out", str(iconset / "icon_256x256.png")], capture_output=True)
+        elif size == 512:
+            subprocess.run(["sips", "-z", "512", "512", str(source_icon), "--out", str(iconset / "icon_256x256@2x.png")], capture_output=True)
+            subprocess.run(["sips", "-z", "512", "512", str(source_icon), "--out", str(iconset / "icon_512x512.png")], capture_output=True)
+        elif size == 1024:
+            subprocess.run(["sips", "-z", "1024", "1024", str(source_icon), "--out", str(iconset / "icon_512x512@2x.png")], capture_output=True)
+
+    icns_path = spec_dir / "icon.icns"
+    subprocess.run(["iconutil", "-c", "icns", str(iconset), "-o", str(icns_path)], capture_output=True)
+    # Cleanup iconset
+    import shutil
+    shutil.rmtree(iconset, ignore_errors=True)
+    if icns_path.exists():
+        print(f"  Generated: {icns_path.name}")
+
+    return datas
+
+print("Generating icons from icon.png...")
+datas = generate_icons()
 
 a = Analysis(
     [str(project_root / "packages" / "macos" / "src" / "club_calendar_macos" / "menubar.py")],
@@ -86,5 +146,6 @@ app = BUNDLE(
         "LSUIElement": True,  # Hide from Dock
         "CFBundleShortVersionString": "0.1.0",
         "NSHighResolutionCapable": True,
+        "NSCalendarsUsageDescription": "Club Calendar syncs Strava club events to your calendar.",
     },
 )

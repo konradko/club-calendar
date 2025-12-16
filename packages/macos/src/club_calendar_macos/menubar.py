@@ -60,6 +60,7 @@ def _create_service(settings: Settings) -> ClubCalendarService:
         client_secret=settings.strava_client_secret,
         token_store=get_token_store(),
         refresh_token=settings.strava_refresh_token,
+        api_base_url=settings.strava_api_base or None,
     )
 
 
@@ -709,8 +710,8 @@ def create_app(rumps_module=None, controller=None):
             self.controller = controller
             self._update_menu()
 
-            # Auto-sync on startup if ready
-            if self.controller.is_ready():
+            # Auto-sync on startup if ready and enabled
+            if self.controller.is_ready() and self.controller.settings.sync_on_startup:
                 self._sync_on_startup()
 
         def _sync_on_startup(self) -> None:
