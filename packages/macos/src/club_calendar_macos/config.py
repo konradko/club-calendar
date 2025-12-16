@@ -94,6 +94,9 @@ class Settings:
     # Sync configuration
     sync_interval_minutes: int = 60  # Default: 1 hour
 
+    # Calendar settings
+    calendar_name: str = "Club Calendar"  # Name of calendar in Apple Calendar
+
     # Flooding prevention
     max_events_per_club_per_week: int = 10  # Max events per club per week (0 = unlimited)
     sync_weeks: int = 8  # How many weeks ahead to sync events

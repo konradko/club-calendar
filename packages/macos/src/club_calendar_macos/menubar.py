@@ -5,7 +5,7 @@ import plistlib
 import subprocess
 import sys
 import webbrowser
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
@@ -242,7 +242,7 @@ class MenuBarController:
             self.last_events = sorted(events, key=lambda e: e.start_datetime)
 
             # Step 9: Sync to Apple Calendar
-            result = sync_events_to_calendar(events)
+            result = sync_events_to_calendar(events, self.settings.calendar_name)
 
             if result.success:
                 self.last_sync = datetime.now()
@@ -724,58 +724,73 @@ def create_app(rumps_module=None, controller=None):
                 return "🥾"
             return "📅"
 
-        def _get_week_label(self, event_dt: datetime) -> str:
-            """Get week label for event grouping."""
-            now = datetime.now(UTC)
-            _, current_week, _ = now.isocalendar()
-            _, event_week, _ = event_dt.isocalendar()
+        def _get_day_label(self, event_dt: datetime) -> tuple[str, bool]:
+            """Get day label for event grouping.
 
-            if event_week == current_week:
-                return "This Week"
-            elif event_week == current_week + 1:
-                return "Next Week"
+            Returns:
+                Tuple of (label, is_this_week)
+            """
+            now = datetime.now(event_dt.tzinfo or UTC)
+            event_date = event_dt.date()
+            today = now.date()
+
+            if event_date == today:
+                # "Today (Tue, 16 Dec):"
+                return f"Today ({event_dt.strftime('%a, %d %b')}):", True
+            elif event_date == today + timedelta(days=1):
+                return "Tomorrow:", True
             else:
-                return "Later"
+                # Check if this week (same ISO week)
+                _, event_week, _ = event_dt.isocalendar()
+                _, current_week, _ = now.isocalendar()
+                if event_week == current_week:
+                    # "Wednesday (18 Dec):"
+                    return f"{event_dt.strftime('%A')} ({event_dt.strftime('%d %b')}):", True
+                else:
+                    return "Later:", False
 
         def _update_menu(self) -> None:
             """Update menu items based on current state."""
             self.menu.clear()
 
             if self.controller.is_ready():
-                # Upcoming events grouped by week
-                upcoming = self.controller.get_upcoming_events(limit=15)
-                if upcoming:
-                    current_week_label = None
-                    later_count = 0
-                    for event in upcoming:
-                        # Week grouping header
-                        week_label = self._get_week_label(event.start_datetime)
+                # Upcoming events grouped by day
+                # Settings: max events before hiding "Later", max "Later" events
+                max_before_later = 5  # TODO: make configurable
+                max_later_events = 5  # TODO: make configurable
 
-                        # Limit "Later" section to 5 events
-                        if week_label == "Later":
+                upcoming = self.controller.get_upcoming_events(limit=20)
+                if upcoming:
+                    current_label = None
+                    this_week_count = 0
+                    later_count = 0
+
+                    for event in upcoming:
+                        dt = event.start_datetime.astimezone()
+                        day_label, is_this_week = self._get_day_label(dt)
+
+                        # Skip "Later" if we already have enough events
+                        if not is_this_week:
+                            if this_week_count >= max_before_later:
+                                continue
                             later_count += 1
-                            if later_count > 5:
+                            if later_count > max_later_events:
                                 continue
 
-                        if week_label != current_week_label:
-                            if current_week_label is not None:
-                                self.menu.add(rumps.separator)
-                            self.menu.add(rumps.MenuItem(week_label, callback=None))
-                            current_week_label = week_label
+                        # Day header
+                        if day_label != current_label:
+                            self.menu.add(rumps.MenuItem(day_label, callback=None))
+                            current_label = day_label
 
-                        # Format: "🚴 Mon 14:00 NieDamRady: Group Ride" (this week)
-                        # Format: "🚴 21.12 14:00 NieDamRady: Group Ride" (later)
-                        dt = event.start_datetime.astimezone()
-                        if week_label == "This Week":
-                            date_str = dt.strftime("%a %H:%M")
-                        else:
-                            date_str = dt.strftime("%d.%m %H:%M")
+                        if is_this_week:
+                            this_week_count += 1
 
+                        # Format: "  🚲 14:00   NieDamRady   Group Ride"
+                        time_str = dt.strftime("%H:%M")
                         emoji = self._get_event_emoji(event.title, event.activity_type)
-                        # Full club name, truncate title if needed
                         club = event.club_name
-                        title = event.title[:20] + "…" if len(event.title) > 20 else event.title
-                        label = f"  {emoji} {date_str} {club}: {title}"
+                        title = event.title[:25] + "…" if len(event.title) > 25 else event.title
+                        label = f"  {emoji} {time_str}   {club}   {title}"
                         item = rumps.MenuItem(
                             label,
                             callback=lambda _, e=event: self.open_event(e),
@@ -827,6 +842,8 @@ def create_app(rumps_module=None, controller=None):
             login_item = rumps.MenuItem("Start at Login", callback=self.toggle_login)
             login_item.state = self.controller.is_login_enabled()
             self.menu.add(login_item)
+            self.menu.add(rumps.separator)
+            self.menu.add(rumps.MenuItem("Quit", callback=self.quit_app))
 
         def _update_menu_on_main_thread(self) -> None:
             """Schedule menu update on main thread (required by AppKit)."""

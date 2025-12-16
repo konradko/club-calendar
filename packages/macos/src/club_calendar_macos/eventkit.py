@@ -8,8 +8,8 @@ from club_calendar_core.strava import ClubEvent
 
 logger = logging.getLogger(__name__)
 
-# Calendar name for club events
-CALENDAR_NAME = "Club Calendar"
+# Default calendar name (can be overridden via settings)
+DEFAULT_CALENDAR_NAME = "Club Calendar"
 
 
 @dataclass
@@ -62,8 +62,12 @@ def _get_event_store():
     return store, None
 
 
-def _find_or_create_calendar(store) -> tuple:
-    """Find or create the Club Calendar calendar.
+def _find_or_create_calendar(store, calendar_name: str = DEFAULT_CALENDAR_NAME) -> tuple:
+    """Find or create a calendar by name.
+
+    Args:
+        store: EventKit event store
+        calendar_name: Name of the calendar to find or create
 
     Returns:
         Tuple of (calendar, error_message)
@@ -75,14 +79,14 @@ def _find_or_create_calendar(store) -> tuple:
     # Look for existing calendar
     calendars = store.calendarsForEntityType_(EventKit.EKEntityTypeEvent)
     for cal in calendars:
-        if cal.title() == CALENDAR_NAME:
+        if cal.title() == calendar_name:
             return cal, None
 
     # Create new calendar
     calendar = EventKit.EKCalendar.calendarForEntityType_eventStore_(
         EventKit.EKEntityTypeEvent, store
     )
-    calendar.setTitle_(CALENDAR_NAME)
+    calendar.setTitle_(calendar_name)
 
     # Use default calendar source (usually iCloud or local)
     sources = store.sources()
@@ -115,7 +119,7 @@ def _find_or_create_calendar(store) -> tuple:
     if not success:
         return None, "Failed to create calendar"
 
-    logger.info(f"Created calendar: {CALENDAR_NAME}")
+    logger.info(f"Created calendar: {calendar_name}")
     return calendar, None
 
 
@@ -228,17 +232,20 @@ def _find_event_by_strava_id(existing_events, strava_id: int):
     return None
 
 
-def sync_events_to_calendar(events: list[ClubEvent]) -> SyncResult:
+def sync_events_to_calendar(
+    events: list[ClubEvent], calendar_name: str = DEFAULT_CALENDAR_NAME
+) -> SyncResult:
     """Sync club events to Apple Calendar.
 
     Smart sync that:
-    1. Creates "Club Calendar" if it doesn't exist
+    1. Creates calendar if it doesn't exist
     2. Adds new events that don't exist
     3. Updates existing events if changed
     4. Marks cancelled events (no longer in Strava) as "[Cancelled]"
 
     Args:
         events: List of club events to sync
+        calendar_name: Name of the calendar to sync to
 
     Returns:
         SyncResult with success status and counts
@@ -253,7 +260,7 @@ def sync_events_to_calendar(events: list[ClubEvent]) -> SyncResult:
     if error:
         return SyncResult(success=False, message=error)
 
-    calendar, error = _find_or_create_calendar(store)
+    calendar, error = _find_or_create_calendar(store, calendar_name)
     if error:
         return SyncResult(success=False, message=error)
 
