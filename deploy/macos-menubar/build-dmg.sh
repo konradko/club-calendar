@@ -16,11 +16,6 @@ echo "======================================="
 # Change to project root
 cd "$PROJECT_ROOT"
 
-# Build icons from icon.png
-echo ""
-echo "Building icons..."
-"$SCRIPT_DIR/build-icons.sh"
-
 # Sync all packages and dev dependencies (includes rumps, pyinstaller)
 echo ""
 echo "Installing dependencies..."
