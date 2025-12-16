@@ -720,38 +720,45 @@ def create_app(rumps_module=None, controller=None):
             self.menu.add(login_item)
 
         def sync_now(self, _) -> None:
-            """Run sync command with pre-validation."""
-            # Validate calendar access first
-            cal_ok, cal_msg = self.controller.validate_calendar_access()
-            if not cal_ok:
-                notify(
-                    title="Club Calendar",
-                    subtitle="Calendar Error",
-                    message=cal_msg,
-                )
-                return
+            """Run sync command in background thread."""
 
-            result = self.controller.run_sync()
-            if result.success:
-                self._update_menu()
-                notify(
-                    title="Club Calendar",
-                    subtitle="Calendar Updated",
-                    message=result.message,
-                )
-            else:
-                notify(
-                    title="Club Calendar",
-                    subtitle="Sync Failed",
-                    message=result.message,
-                )
+            def do_sync():
+                # Validate calendar access first
+                cal_ok, cal_msg = self.controller.validate_calendar_access()
+                if not cal_ok:
+                    notify(
+                        title="Club Calendar",
+                        subtitle="Calendar Error",
+                        message=cal_msg,
+                    )
+                    return
+
+                result = self.controller.run_sync()
+                if result.success:
+                    self._update_menu()
+                    notify(
+                        title="Club Calendar",
+                        subtitle="Calendar Updated",
+                        message=result.message,
+                    )
+                else:
+                    notify(
+                        title="Club Calendar",
+                        subtitle="Sync Failed",
+                        message=result.message,
+                    )
+
+            Thread(target=do_sync, daemon=True).start()
 
         @rumps.timer(60)  # Check every minute
         def auto_sync(self, _) -> None:
             """Automatically sync in the background based on configured interval."""
-            if self.controller.should_auto_sync():
-                logger.info("Running auto-sync...")
+            if not self.controller.should_auto_sync():
+                return
 
+            logger.info("Running auto-sync...")
+
+            def do_auto_sync():
                 # Validate calendar access first
                 cal_ok, cal_msg = self.controller.validate_calendar_access()
                 if not cal_ok:
@@ -776,6 +783,8 @@ def create_app(rumps_module=None, controller=None):
                         subtitle="Auto-sync failed",
                         message=result.message,
                     )
+
+            Thread(target=do_auto_sync, daemon=True).start()
 
         def run_auth(self, _) -> None:
             """Run OAuth authentication flow."""

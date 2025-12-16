@@ -1,6 +1,6 @@
 """Tests for menubar app."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from io import BytesIO
 from unittest.mock import MagicMock, patch
 
@@ -23,13 +23,19 @@ def mock_settings(tmp_path):
     mock = MagicMock()
     mock.has_strava_credentials.return_value = True
     mock.has_refresh_token.return_value = True
+    mock.has_clubs.return_value = True
     mock.get_club_ids.return_value = [123, 456]
-    mock.ensure_output_dir.return_value = tmp_path
     mock.strava_client_id = "test_id"
     mock.strava_client_secret = "test_secret"
     mock.strava_refresh_token = "test_token"
-    mock.club_city_filter = ""
-    mock.club_ids = [123, 456]
+    mock.cities = []
+    mock.clubs = {
+        "123": {"name": "Test Club 1", "city": "Portland", "enabled": True},
+        "456": {"name": "Test Club 2", "city": "Seattle", "enabled": True},
+    }
+    mock.sync_weeks = 8
+    mock.max_events_per_club_per_week = 5
+    mock.sync_interval_minutes = 60
     return mock
 
 
@@ -53,10 +59,11 @@ def mock_rumps():
 
     # Create a base App class that can be subclassed
     class MockApp:
-        def __init__(self, name, icon=None, title=None):
+        def __init__(self, name, icon=None, title=None, template=None):
             self.name = name
             self.icon = icon
             self.title = title
+            self.template = template
             self.menu = MagicMock()
             self.menu.clear = MagicMock()
             self.menu.add = MagicMock()
@@ -165,24 +172,27 @@ class TestMenuBarController:
         assert is_valid is False
 
     def test_get_config_status_no_clubs(self, mock_settings):
-        """Test config status when no clubs configured."""
+        """Test config status when no clubs yet (will be auto-fetched)."""
         mock_settings.has_strava_credentials.return_value = True
         mock_settings.has_refresh_token.return_value = True
         mock_settings.get_club_ids.return_value = []
+        mock_settings.clubs = {}
         controller = MenuBarController(settings=mock_settings)
 
         message, is_valid = controller.get_config_status()
 
-        assert message == "No clubs configured"
-        assert is_valid is False
+        assert message == "Ready to sync (will fetch clubs)"
+        assert is_valid is True
 
     def test_get_config_status_valid(self, mock_settings):
         """Test config status when fully configured."""
+        mock_settings.cities = ["Portland"]
         controller = MenuBarController(settings=mock_settings)
 
         message, is_valid = controller.get_config_status()
 
-        assert message == "2 club(s) configured"
+        assert "2/2 clubs enabled" in message
+        assert "Cities: Portland" in message
         assert is_valid is True
 
     def test_needs_setup(self, mock_settings):
@@ -205,38 +215,52 @@ class TestMenuBarController:
         assert controller.needs_auth() is False
 
     def test_needs_clubs(self, mock_settings):
-        """Test needs_clubs when clubs not configured."""
+        """Test needs_clubs always returns False (clubs auto-fetched)."""
         mock_settings.has_strava_credentials.return_value = True
         mock_settings.has_refresh_token.return_value = True
         mock_settings.get_club_ids.return_value = []
         controller = MenuBarController(settings=mock_settings)
-        assert controller.needs_clubs() is True
-
-        mock_settings.get_club_ids.return_value = [123]
+        # With auto-fetch, needs_clubs is always False
         assert controller.needs_clubs() is False
 
     def test_is_ready(self, mock_settings):
-        """Test is_ready when fully configured."""
+        """Test is_ready when credentials and auth present (clubs auto-fetched)."""
         controller = MenuBarController(settings=mock_settings)
         assert controller.is_ready() is True
 
-        mock_settings.get_club_ids.return_value = []
+        # Only credentials and auth matter now, not clubs
+        mock_settings.has_refresh_token.return_value = False
         assert controller.is_ready() is False
 
     def test_run_sync_success(self, mock_settings, mock_strava_api):
         """Test successful sync with HTTP mocks."""
+        from club_calendar_macos.eventkit import SyncResult as EventKitSyncResult
+
+        # Setup settings with merge_clubs mock
+        mock_settings.merge_clubs.return_value = 0  # No new clubs
+
         controller = MenuBarController(settings=mock_settings)
 
-        result = controller.run_sync()
+        with patch(
+            "club_calendar_macos.menubar.sync_events_to_calendar",
+            return_value=EventKitSyncResult(
+                success=True, message="Synced 4 events to Apple Calendar", events_added=4
+            ),
+        ):
+            result = controller.run_sync()
 
         assert result.success is True
-        assert "4 events" in result.message  # 2 clubs × 2 events each
         assert controller.last_sync is not None
+        mock_settings.merge_clubs.assert_called_once()
+        mock_settings.save.assert_called()
 
     def test_run_sync_no_events(self, mock_settings, httpx_mock):
         """Test sync with no events."""
+        from club_calendar_macos.eventkit import SyncResult as EventKitSyncResult
 
-        # Mock API to return empty events
+        mock_settings.merge_clubs.return_value = 0
+
+        # Mock API to return clubs and empty events
         def handler(request):
             url = str(request.url)
             if "/oauth/token" in url:
@@ -247,6 +271,10 @@ class TestMenuBarController:
                         "refresh_token": "test",
                         "expires_at": 9999999999,
                     },
+                )
+            if "/athlete/clubs" in url:
+                return httpx.Response(
+                    200, json=[{"id": 123, "name": "Test Club", "city": "Portland"}]
                 )
             if "/group_events" in url:
                 return httpx.Response(200, json=[])
@@ -255,34 +283,226 @@ class TestMenuBarController:
         httpx_mock.add_callback(handler, is_reusable=True)
         controller = MenuBarController(settings=mock_settings)
 
-        result = controller.run_sync()
+        with patch(
+            "club_calendar_macos.menubar.sync_events_to_calendar",
+            return_value=EventKitSyncResult(
+                success=True, message="No events to sync", events_added=0
+            ),
+        ):
+            result = controller.run_sync()
 
         assert result.success is True
-        assert "No events" in result.message
 
-    def test_run_sync_api_error(self, mock_settings, httpx_mock):
-        """Test sync handles API errors."""
+    def test_run_sync_eventkit_error(self, mock_settings, mock_strava_api):
+        """Test sync handles EventKit errors."""
+        from club_calendar_macos.eventkit import SyncResult as EventKitSyncResult
 
-        def handler(request):
-            url = str(request.url)
-            if "/oauth/token" in url:
-                return httpx.Response(
-                    200,
-                    json={
-                        "access_token": "test",
-                        "refresh_token": "test",
-                        "expires_at": 9999999999,
-                    },
-                )
-            return httpx.Response(500, json={"error": "Server error"})
+        mock_settings.merge_clubs.return_value = 0
 
-        httpx_mock.add_callback(handler, is_reusable=True)
         controller = MenuBarController(settings=mock_settings)
 
+        with patch(
+            "club_calendar_macos.menubar.sync_events_to_calendar",
+            return_value=EventKitSyncResult(success=False, message="Calendar access denied"),
+        ):
+            result = controller.run_sync()
+
+        assert result.success is False
+        assert "Calendar access denied" in result.message
+
+    def test_run_sync_no_enabled_clubs(self, mock_settings, mock_strava_api):
+        """Test sync when no clubs are enabled."""
+        mock_settings.merge_clubs.return_value = 0
+        mock_settings.get_club_ids.return_value = []  # No enabled clubs
+
+        controller = MenuBarController(settings=mock_settings)
         result = controller.run_sync()
 
-        # Sync succeeds but with no events (errors logged)
         assert result.success is True
+        assert "No clubs enabled" in result.message
+
+    def test_run_sync_preserves_user_enabled_choices(self, mock_settings, mock_strava_api):
+        """Test sync merges clubs and preserves user's enabled/disabled choices."""
+        from club_calendar_macos.eventkit import SyncResult as EventKitSyncResult
+
+        # User has disabled club 456
+        mock_settings.clubs = {
+            "123": {"name": "Enabled Club", "city": "Portland", "enabled": True},
+            "456": {"name": "Disabled Club", "city": "Seattle", "enabled": False},
+        }
+        mock_settings.get_club_ids.return_value = [123]  # Only enabled club
+        mock_settings.merge_clubs.return_value = 0
+
+        controller = MenuBarController(settings=mock_settings)
+
+        with patch(
+            "club_calendar_macos.menubar.sync_events_to_calendar",
+            return_value=EventKitSyncResult(success=True, message="OK", events_added=1),
+        ):
+            result = controller.run_sync()
+
+        assert result.success is True
+        # Verify merge_clubs was called (preserves enabled state)
+        mock_settings.merge_clubs.assert_called_once()
+        # Verify settings were saved
+        mock_settings.save.assert_called()
+
+    def test_filter_events_limits_per_week(self, mock_settings):
+        """Test _filter_events applies per-club per-week limits."""
+        from datetime import timedelta
+
+        from club_calendar_core.strava import ClubEvent
+
+        mock_settings.sync_weeks = 52
+        mock_settings.max_events_per_club_per_week = 2
+        mock_settings.merge_clubs.return_value = 0
+
+        controller = MenuBarController(settings=mock_settings)
+
+        # Create events - 5 events in the same week from same club (within sync_weeks)
+        now = datetime.now(UTC)
+        base_date = now + timedelta(days=7)  # Next week
+        events = []
+        for i in range(5):
+            events.append(
+                ClubEvent(
+                    id=i,
+                    title=f"Event {i}",
+                    description=None,
+                    club_id=123,
+                    club_name="Test Club",
+                    start_datetime=base_date + timedelta(hours=i),
+                    address=None,
+                    route_id=None,
+                    organizer_name=None,
+                )
+            )
+
+        filtered = controller._filter_events(events)
+
+        # Should be limited to 2 per week
+        assert len(filtered) == 2
+
+    def test_filter_events_respects_sync_weeks(self, mock_settings):
+        """Test _filter_events filters out events beyond sync_weeks."""
+        from datetime import timedelta
+
+        from club_calendar_core.strava import ClubEvent
+
+        mock_settings.sync_weeks = 1  # Only 1 week
+        mock_settings.max_events_per_club_per_week = 0  # Unlimited
+
+        controller = MenuBarController(settings=mock_settings)
+
+        # Create events - one this week, one in 3 weeks
+        now = datetime.now(UTC)
+        events = [
+            ClubEvent(
+                id=1,
+                title="This week",
+                description=None,
+                club_id=123,
+                club_name="Test Club",
+                start_datetime=now + timedelta(days=1),
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+            ClubEvent(
+                id=2,
+                title="In 3 weeks",
+                description=None,
+                club_id=123,
+                club_name="Test Club",
+                start_datetime=now + timedelta(weeks=3),
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+        ]
+
+        filtered = controller._filter_events(events)
+
+        assert len(filtered) == 1
+        assert filtered[0].title == "This week"
+
+    def test_build_sync_message_few_events(self, mock_settings):
+        """Test _build_sync_message with 1-2 events shows titles."""
+        from club_calendar_core.strava import ClubEvent
+
+        mock_settings.merge_clubs.return_value = 0
+        controller = MenuBarController(settings=mock_settings)
+
+        events = [
+            ClubEvent(
+                id=1,
+                title="Morning Ride",
+                description=None,
+                club_id=123,
+                club_name="Test Club",
+                start_datetime=datetime(2099, 1, 15, 8, 0, tzinfo=UTC),
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+        ]
+
+        message = controller._build_sync_message(events, 1)
+
+        assert "Morning Ride" in message
+
+    def test_build_sync_message_many_events(self, mock_settings):
+        """Test _build_sync_message with 3+ events shows club counts."""
+        from club_calendar_core.strava import ClubEvent
+
+        mock_settings.merge_clubs.return_value = 0
+        mock_settings.clubs = {
+            "123": {"name": "Cycling Club", "city": "Portland", "enabled": True},
+            "456": {"name": "Running Club", "city": "Seattle", "enabled": True},
+        }
+        controller = MenuBarController(settings=mock_settings)
+
+        events = [
+            ClubEvent(
+                id=1,
+                title="Ride 1",
+                description=None,
+                club_id=123,
+                club_name="Cycling Club",
+                start_datetime=datetime(2099, 1, 15, 8, tzinfo=UTC),
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+            ClubEvent(
+                id=2,
+                title="Ride 2",
+                description=None,
+                club_id=123,
+                club_name="Cycling Club",
+                start_datetime=datetime(2099, 1, 16, 8, tzinfo=UTC),
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+            ClubEvent(
+                id=3,
+                title="Run 1",
+                description=None,
+                club_id=456,
+                club_name="Running Club",
+                start_datetime=datetime(2099, 1, 17, 8, tzinfo=UTC),
+                address=None,
+                route_id=None,
+                organizer_name=None,
+            ),
+        ]
+
+        message = controller._build_sync_message(events, 3)
+
+        assert "3 events" in message
+        assert "Cycling Club: 2" in message
+        assert "Running Club: 1" in message
 
     def test_run_sync_auth_failure(self, mock_settings, httpx_mock):
         """Test sync handles authentication failure."""
@@ -300,21 +520,6 @@ class TestMenuBarController:
         # Sync fails when auth fails
         assert result.success is False
         assert "Invalid" in result.message or "expired" in result.message
-
-    def test_run_sync_file_system_error(self, mock_settings):
-        """Test sync handles file system errors (OSError).
-
-        True E2E test - triggers actual OSError through settings.
-        """
-        controller = MenuBarController(settings=mock_settings)
-
-        # Make ensure_output_dir raise OSError
-        mock_settings.ensure_output_dir.side_effect = OSError("Permission denied")
-
-        result = controller.run_sync()
-
-        assert result.success is False
-        assert "File error" in result.message or "Permission" in result.message
 
     def test_run_auth_success(self, mock_settings):
         """Test running auth command via osascript."""
@@ -338,28 +543,6 @@ class TestMenuBarController:
 
             assert result.success is False
             assert "osascript" in result.output
-
-    def test_run_clubs_setup_success(self, mock_settings):
-        """Test running clubs setup command via osascript."""
-        controller = MenuBarController(settings=mock_settings)
-
-        with patch("club_calendar_macos.menubar.subprocess.run") as mock_run:
-            result = controller.run_clubs_setup()
-
-            assert result.success is True
-            assert "Terminal" in result.output
-            mock_run.assert_called_once()
-
-    def test_run_clubs_setup_failure(self, mock_settings):
-        """Test clubs setup command failure."""
-        controller = MenuBarController(settings=mock_settings)
-
-        with patch("club_calendar_macos.menubar.subprocess.run") as mock_run:
-            mock_run.side_effect = OSError("osascript not found")
-
-            result = controller.run_clubs_setup()
-
-            assert result.success is False
 
     def test_open_config_file(self, mock_settings, tmp_path):
         """Test opening config file."""
@@ -416,23 +599,6 @@ class TestMenuBarController:
             # File should now exist (touch was called)
             assert log_path.exists()
             mock_run.assert_called_once_with(["open", str(log_path)])
-
-    def test_get_output_dir(self, mock_settings, tmp_path):
-        """Test getting output directory."""
-        controller = MenuBarController(settings=mock_settings)
-
-        result = controller.get_output_dir()
-
-        assert result == tmp_path
-
-    def test_open_output_folder(self, mock_settings, tmp_path):
-        """Test opening output folder."""
-        controller = MenuBarController(settings=mock_settings)
-
-        with patch("club_calendar_macos.menubar.subprocess.run") as mock_run:
-            controller.open_output_folder()
-
-            mock_run.assert_called_once_with(["open", str(tmp_path)])
 
     def test_reload_settings(self, mock_settings):
         """Test reloading settings."""
@@ -539,71 +705,6 @@ class TestMenuBarController:
         mock_settings.save.side_effect = OSError("Error")
 
         result = controller.save_token("token")
-
-        assert result.success is False
-
-    def test_fetch_clubs_success(self, mock_settings, mock_strava_api):
-        """Test fetching clubs from API via HTTP."""
-        controller = MenuBarController(settings=mock_settings)
-
-        result = controller.fetch_clubs()
-
-        assert result is not None
-        assert len(result) == 2
-        assert result[0].name == "Test Cycling Club"
-        assert result[1].name == "Running Group"
-
-    def test_fetch_clubs_with_city_filter(self, mock_settings, mock_strava_api):
-        """Test fetching clubs with city filter."""
-        mock_settings.club_city_filter = "Portland"
-        controller = MenuBarController(settings=mock_settings)
-
-        result = controller.fetch_clubs()
-
-        # Only Portland club should be returned
-        assert result is not None
-        assert len(result) == 1
-        assert result[0].city == "Portland"
-
-    def test_fetch_clubs_error(self, mock_settings, httpx_mock):
-        """Test fetch_clubs handles API errors."""
-
-        def handler(request):
-            url = str(request.url)
-            if "/oauth/token" in url:
-                return httpx.Response(
-                    200,
-                    json={
-                        "access_token": "test",
-                        "refresh_token": "test",
-                        "expires_at": 9999999999,
-                    },
-                )
-            return httpx.Response(500, json={"error": "Server error"})
-
-        httpx_mock.add_callback(handler, is_reusable=True)
-        controller = MenuBarController(settings=mock_settings)
-
-        result = controller.fetch_clubs()
-
-        assert result is None  # Returns None on error
-
-    def test_save_club_ids_success(self, mock_settings):
-        """Test saving club IDs via settings."""
-        controller = MenuBarController(settings=mock_settings)
-
-        result = controller.save_club_ids([123, 456])
-
-        assert result.success is True
-        assert mock_settings.club_ids == [123, 456]
-        mock_settings.save.assert_called_once()
-
-    def test_save_club_ids_failure(self, mock_settings):
-        """Test save_club_ids handles errors."""
-        controller = MenuBarController(settings=mock_settings)
-        mock_settings.save.side_effect = OSError("Error")
-
-        result = controller.save_club_ids([123])
 
         assert result.success is False
 
@@ -758,6 +859,13 @@ class TestMenuBarController:
         controller.last_sync = datetime.now() - timedelta(minutes=61)
 
         assert controller.should_auto_sync() is True
+
+    def test_should_auto_sync_disabled(self, mock_settings):
+        """Test should_auto_sync returns False when disabled (interval=0)."""
+        mock_settings.sync_interval_minutes = 0
+        controller = MenuBarController(settings=mock_settings)
+
+        assert controller.should_auto_sync() is False
 
 
 class TestOAuthCallbackHandler:
@@ -934,7 +1042,20 @@ class TestCreateApp:
         """Test sync_now callback on success."""
         controller = MenuBarController(settings=mock_settings)
 
-        with patch.object(controller, "run_sync") as mock_sync:
+        # Mock Thread to run target synchronously
+        class SyncThread:
+            def __init__(self, target, daemon):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        with (
+            patch.object(controller, "validate_calendar_access") as mock_validate,
+            patch.object(controller, "run_sync") as mock_sync,
+            patch("club_calendar_macos.menubar.Thread", SyncThread),
+        ):
+            mock_validate.return_value = (True, "OK")
             mock_sync.return_value = SyncResult(success=True, message="Done")
 
             app = create_app(rumps_module=mock_rumps, controller=controller)
@@ -942,7 +1063,7 @@ class TestCreateApp:
 
             mock_rumps.notification.assert_called_with(
                 title="Club Calendar",
-                subtitle="Sync complete",
+                subtitle="Calendar Updated",
                 message="Done",
             )
 
@@ -950,7 +1071,20 @@ class TestCreateApp:
         """Test sync_now callback on failure."""
         controller = MenuBarController(settings=mock_settings)
 
-        with patch.object(controller, "run_sync") as mock_sync:
+        # Mock Thread to run target synchronously
+        class SyncThread:
+            def __init__(self, target, daemon):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        with (
+            patch.object(controller, "validate_calendar_access") as mock_validate,
+            patch.object(controller, "run_sync") as mock_sync,
+            patch("club_calendar_macos.menubar.Thread", SyncThread),
+        ):
+            mock_validate.return_value = (True, "OK")
             mock_sync.return_value = SyncResult(success=False, message="Error")
 
             app = create_app(rumps_module=mock_rumps, controller=controller)
@@ -958,7 +1092,7 @@ class TestCreateApp:
 
             mock_rumps.notification.assert_called_with(
                 title="Club Calendar",
-                subtitle="Sync failed",
+                subtitle="Sync Failed",
                 message="Error",
             )
 
@@ -966,7 +1100,20 @@ class TestCreateApp:
         """Test auto_sync when controller is ready and sync succeeds."""
         controller = MenuBarController(settings=mock_settings)
 
-        with patch.object(controller, "run_sync") as mock_sync:
+        # Mock Thread to run target synchronously
+        class SyncThread:
+            def __init__(self, target, daemon):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        with (
+            patch.object(controller, "validate_calendar_access") as mock_validate,
+            patch.object(controller, "run_sync") as mock_sync,
+            patch("club_calendar_macos.menubar.Thread", SyncThread),
+        ):
+            mock_validate.return_value = (True, "OK")
             mock_sync.return_value = SyncResult(success=True, message="2 events")
 
             app = create_app(rumps_module=mock_rumps, controller=controller)
@@ -980,7 +1127,20 @@ class TestCreateApp:
         """Test auto_sync when controller is ready but sync fails."""
         controller = MenuBarController(settings=mock_settings)
 
-        with patch.object(controller, "run_sync") as mock_sync:
+        # Mock Thread to run target synchronously
+        class SyncThread:
+            def __init__(self, target, daemon):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        with (
+            patch.object(controller, "validate_calendar_access") as mock_validate,
+            patch.object(controller, "run_sync") as mock_sync,
+            patch("club_calendar_macos.menubar.Thread", SyncThread),
+        ):
+            mock_validate.return_value = (True, "OK")
             mock_sync.return_value = SyncResult(success=False, message="API error")
 
             app = create_app(rumps_module=mock_rumps, controller=controller)
@@ -1008,16 +1168,6 @@ class TestCreateApp:
             mock_sync.assert_not_called()
             mock_rumps.notification.assert_not_called()
 
-    def test_create_app_open_folder(self, mock_rumps, mock_settings):
-        """Test open_folder callback."""
-        controller = MenuBarController(settings=mock_settings)
-
-        with patch.object(controller, "open_output_folder") as mock_open:
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.open_folder(None)
-
-            mock_open.assert_called_once()
-
     def test_create_app_reload_settings(self, mock_rumps, mock_settings):
         """Test reload_settings callback."""
         controller = MenuBarController(settings=mock_settings)
@@ -1041,8 +1191,9 @@ class TestCreateApp:
         assert any("Sync Now" in str(c) for c in calls)
 
     def test_create_app_update_menu_not_ready(self, mock_rumps, mock_settings):
-        """Test _update_menu when not ready hides sync options."""
-        mock_settings.get_club_ids.return_value = []
+        """Test _update_menu when missing creds shows warning and Reload Settings."""
+        # Not ready means missing credentials (clubs are auto-fetched now)
+        mock_settings.has_strava_credentials.return_value = False
         controller = MenuBarController(settings=mock_settings)
         app = create_app(rumps_module=mock_rumps, controller=controller)
 
@@ -1050,10 +1201,11 @@ class TestCreateApp:
         app._update_menu()
 
         calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
-        assert any("Setup" in str(c) for c in calls)
+        assert any("⚙️" in str(c) for c in calls)
+        assert any("Reload Settings" in str(c) for c in calls)
 
     def test_create_app_update_menu_valid_config(self, mock_rumps, mock_settings):
-        """Test _update_menu with valid config shows checkmark."""
+        """Test _update_menu with valid config shows Sync Now and Edit Config."""
         controller = MenuBarController(settings=mock_settings)
         app = create_app(rumps_module=mock_rumps, controller=controller)
 
@@ -1061,7 +1213,8 @@ class TestCreateApp:
         app._update_menu()
 
         calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
-        assert any("✓" in str(c) for c in calls)
+        assert any("Sync Now" in str(c) for c in calls)
+        assert any("Edit Config" in str(c) for c in calls)
 
     def test_create_app_update_menu_invalid_config(self, mock_rumps, mock_settings):
         """Test _update_menu with invalid config shows warning."""
@@ -1073,7 +1226,22 @@ class TestCreateApp:
         app._update_menu()
 
         calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
-        assert any("⚠️" in str(c) for c in calls)
+        assert any("⚙️" in str(c) for c in calls)
+
+    def test_create_app_update_menu_needs_auth(self, mock_rumps, mock_settings):
+        """Test _update_menu when has creds but not authenticated."""
+        mock_settings.has_strava_credentials.return_value = True
+        mock_settings.has_refresh_token.return_value = False
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+
+        mock_rumps.MenuItem.reset_mock()
+        app._update_menu()
+
+        calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
+        assert any("🔗" in str(c) for c in calls)
+        assert any("Edit Config" in str(c) for c in calls)
+        assert any("Reload Settings" in str(c) for c in calls)
 
     def test_create_app_uses_default_controller(self, mock_rumps):
         """Test create_app creates controller if not provided."""
@@ -1101,7 +1269,7 @@ class TestCreateApp:
             mock_rumps.clicked = MagicMock(side_effect=lambda name: lambda f: f)
 
             class MockApp:
-                def __init__(self, name, icon=None, title=None):
+                def __init__(self, name, icon=None, title=None, template=None):
                     self.menu = MagicMock()
 
             mock_rumps.App = MockApp
@@ -1139,133 +1307,6 @@ class TestCreateApp:
         app.quit_app(None)
 
         mock_rumps.quit_application.assert_called_once()
-
-    def test_create_app_configure_api_success(self, mock_rumps, mock_settings):
-        """Test configure_api dialog flow with valid credentials."""
-        mock_settings.strava_client_id = ""
-        mock_settings.strava_client_secret = ""
-        controller = MenuBarController(settings=mock_settings)
-
-        # Mock window response with valid credentials
-        mock_response = MagicMock()
-        mock_response.clicked = True
-        mock_response.text = "new_client_id\nnew_client_secret"
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with (
-            patch.object(controller, "save_credentials") as mock_save,
-            patch.object(controller, "start_oauth_flow") as mock_oauth,
-            patch("club_calendar_macos.menubar.run_oauth_server"),
-            patch("club_calendar_macos.menubar.Thread") as mock_thread,
-        ):
-            mock_save.return_value = SetupResult(success=True, message="Saved")
-            mock_oauth.return_value = SetupResult(success=True, message="Started")
-
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.configure_api(None)
-
-            mock_save.assert_called_once_with("new_client_id", "new_client_secret")
-            mock_oauth.assert_called_once()
-            mock_thread.assert_called_once()
-
-    def test_create_app_configure_api_cancel(self, mock_rumps, mock_settings):
-        """Test configure_api dialog when user cancels."""
-        controller = MenuBarController(settings=mock_settings)
-
-        # Mock window response - cancelled
-        mock_response = MagicMock()
-        mock_response.clicked = False
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with patch.object(controller, "save_credentials") as mock_save:
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.configure_api(None)
-
-            mock_save.assert_not_called()
-
-    def test_create_app_configure_api_invalid_input(self, mock_rumps, mock_settings):
-        """Test configure_api with invalid input (missing secret)."""
-        controller = MenuBarController(settings=mock_settings)
-
-        # Mock window response with only one line
-        mock_response = MagicMock()
-        mock_response.clicked = True
-        mock_response.text = "only_client_id"
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with patch.object(controller, "save_credentials") as mock_save:
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.configure_api(None)
-
-            mock_save.assert_not_called()
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_configure_api_empty_values(self, mock_rumps, mock_settings):
-        """Test configure_api with empty client ID or secret."""
-        controller = MenuBarController(settings=mock_settings)
-
-        # Mock window response with empty values
-        mock_response = MagicMock()
-        mock_response.clicked = True
-        mock_response.text = "\n"  # Two empty lines
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with patch.object(controller, "save_credentials") as mock_save:
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.configure_api(None)
-
-            mock_save.assert_not_called()
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_configure_api_save_failure(self, mock_rumps, mock_settings):
-        """Test configure_api when save_credentials fails."""
-        controller = MenuBarController(settings=mock_settings)
-
-        mock_response = MagicMock()
-        mock_response.clicked = True
-        mock_response.text = "id\nsecret"
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with patch.object(controller, "save_credentials") as mock_save:
-            mock_save.return_value = SetupResult(success=False, message="Save failed")
-
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.configure_api(None)
-
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_configure_api_oauth_failure(self, mock_rumps, mock_settings):
-        """Test configure_api when OAuth flow fails to start."""
-        controller = MenuBarController(settings=mock_settings)
-
-        mock_response = MagicMock()
-        mock_response.clicked = True
-        mock_response.text = "id\nsecret"
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with (
-            patch.object(controller, "save_credentials") as mock_save,
-            patch.object(controller, "start_oauth_flow") as mock_oauth,
-        ):
-            mock_save.return_value = SetupResult(success=True, message="Saved")
-            mock_oauth.return_value = SetupResult(success=False, message="OAuth failed")
-
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.configure_api(None)
-
-            mock_rumps.notification.assert_called()
 
     def test_create_app_run_auth_success(self, mock_rumps, mock_settings):
         """Test run_auth with valid credentials."""
@@ -1306,350 +1347,6 @@ class TestCreateApp:
             app = create_app(rumps_module=mock_rumps, controller=controller)
             app.run_auth(None)
 
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_run_clubs_success(self, mock_rumps, mock_settings):
-        """Test run_clubs dialog flow with club selection."""
-        controller = MenuBarController(settings=mock_settings)
-
-        # Mock clubs response
-        mock_clubs = [
-            MagicMock(id=1, name="Club A", city="Portland"),
-            MagicMock(id=2, name="Club B", city="Seattle"),
-        ]
-
-        # Mock window response
-        mock_response = MagicMock()
-        mock_response.clicked = True
-        mock_response.text = "1,2"
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with (
-            patch.object(controller, "fetch_clubs", return_value=mock_clubs),
-            patch.object(controller, "save_club_ids") as mock_save,
-        ):
-            mock_save.return_value = SetupResult(success=True, message="Saved 2 clubs")
-
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.run_clubs(None)
-
-            mock_save.assert_called_once_with([1, 2])
-
-    def test_create_app_run_clubs_no_refresh_token(self, mock_rumps, mock_settings):
-        """Test run_clubs without refresh token shows error."""
-        mock_settings.has_refresh_token.return_value = False
-        controller = MenuBarController(settings=mock_settings)
-
-        app = create_app(rumps_module=mock_rumps, controller=controller)
-        app.run_clubs(None)
-
-        mock_rumps.notification.assert_called()
-
-    def test_create_app_run_clubs_fetch_error(self, mock_rumps, mock_settings):
-        """Test run_clubs when fetch_clubs fails."""
-        controller = MenuBarController(settings=mock_settings)
-
-        with patch.object(controller, "fetch_clubs", return_value=None):
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.run_clubs(None)
-
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_run_clubs_no_clubs(self, mock_rumps, mock_settings):
-        """Test run_clubs when no clubs found."""
-        controller = MenuBarController(settings=mock_settings)
-
-        with patch.object(controller, "fetch_clubs", return_value=[]):
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.run_clubs(None)
-
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_run_clubs_cancel(self, mock_rumps, mock_settings):
-        """Test run_clubs when user cancels."""
-        controller = MenuBarController(settings=mock_settings)
-
-        mock_clubs = [MagicMock(id=1, name="Club A", city="Portland")]
-
-        mock_response = MagicMock()
-        mock_response.clicked = False
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with (
-            patch.object(controller, "fetch_clubs", return_value=mock_clubs),
-            patch.object(controller, "save_club_ids") as mock_save,
-        ):
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.run_clubs(None)
-
-            mock_save.assert_not_called()
-
-    def test_create_app_run_clubs_invalid_selection(self, mock_rumps, mock_settings):
-        """Test run_clubs with invalid selection input."""
-        controller = MenuBarController(settings=mock_settings)
-
-        mock_clubs = [MagicMock(id=1, name="Club A", city="Portland")]
-
-        mock_response = MagicMock()
-        mock_response.clicked = True
-        mock_response.text = "invalid,text"
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with (
-            patch.object(controller, "fetch_clubs", return_value=mock_clubs),
-            patch.object(controller, "save_club_ids") as mock_save,
-        ):
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.run_clubs(None)
-
-            mock_save.assert_not_called()
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_run_clubs_no_selection(self, mock_rumps, mock_settings):
-        """Test run_clubs when no clubs selected."""
-        controller = MenuBarController(settings=mock_settings)
-
-        mock_clubs = [MagicMock(id=1, name="Club A", city="Portland")]
-
-        mock_response = MagicMock()
-        mock_response.clicked = True
-        mock_response.text = ""
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with (
-            patch.object(controller, "fetch_clubs", return_value=mock_clubs),
-            patch.object(controller, "save_club_ids") as mock_save,
-        ):
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.run_clubs(None)
-
-            mock_save.assert_not_called()
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_setup_wizard_full_flow(self, mock_rumps, mock_settings):
-        """Test setup_wizard complete flow from no config."""
-        mock_settings.has_strava_credentials.return_value = False
-        mock_settings.has_refresh_token.return_value = False
-        controller = MenuBarController(settings=mock_settings)
-
-        mock_clubs = [MagicMock(id=1, name="Club A", city="Portland")]
-
-        # Setup multiple window responses for wizard steps
-        responses = [
-            MagicMock(clicked=True, text="client_id\nclient_secret"),  # Step 1: credentials
-            MagicMock(clicked=True, text="1"),  # Step 3: club selection
-        ]
-        response_iter = iter(responses)
-        mock_window = MagicMock()
-        mock_window.run.side_effect = lambda: next(response_iter)
-        mock_rumps.Window.return_value = mock_window
-
-        with (
-            patch.object(controller, "save_credentials") as mock_save_creds,
-            patch.object(controller, "start_oauth_flow") as mock_oauth,
-            patch("club_calendar_macos.menubar.run_oauth_server") as mock_server,
-            patch.object(controller, "fetch_clubs", return_value=mock_clubs),
-            patch.object(controller, "save_club_ids") as mock_save_clubs,
-        ):
-            mock_save_creds.return_value = SetupResult(success=True, message="OK")
-            mock_oauth.return_value = SetupResult(success=True, message="OK")
-            mock_server.return_value = SetupResult(success=True, message="OK")
-            mock_save_clubs.return_value = SetupResult(success=True, message="OK")
-
-            # After credentials are saved, settings should report them
-            def update_has_creds(*args):
-                mock_settings.has_strava_credentials.return_value = True
-                return SetupResult(success=True, message="OK")
-
-            mock_save_creds.side_effect = update_has_creds
-
-            # After OAuth, settings should report token
-            def update_has_token(*args):
-                mock_settings.has_refresh_token.return_value = True
-                return SetupResult(success=True, message="OK")
-
-            mock_server.side_effect = update_has_token
-
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.setup_wizard(None)
-
-            mock_save_creds.assert_called_once()
-            mock_oauth.assert_called_once()
-            mock_save_clubs.assert_called_once()
-
-    def test_create_app_setup_wizard_cancel_at_credentials(self, mock_rumps, mock_settings):
-        """Test setup_wizard cancellation at credentials step."""
-        mock_settings.has_strava_credentials.return_value = False
-        controller = MenuBarController(settings=mock_settings)
-
-        mock_response = MagicMock()
-        mock_response.clicked = False
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with patch.object(controller, "save_credentials") as mock_save:
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.setup_wizard(None)
-
-            mock_save.assert_not_called()
-
-    def test_create_app_setup_wizard_invalid_credentials(self, mock_rumps, mock_settings):
-        """Test setup_wizard with invalid credentials input."""
-        mock_settings.has_strava_credentials.return_value = False
-        controller = MenuBarController(settings=mock_settings)
-
-        mock_response = MagicMock()
-        mock_response.clicked = True
-        mock_response.text = "only_one_line"  # Missing secret
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with patch.object(controller, "save_credentials") as mock_save:
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.setup_wizard(None)
-
-            mock_save.assert_not_called()
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_setup_wizard_oauth_failure(self, mock_rumps, mock_settings):
-        """Test setup_wizard when OAuth fails."""
-        mock_settings.has_strava_credentials.return_value = True
-        mock_settings.has_refresh_token.return_value = False
-        controller = MenuBarController(settings=mock_settings)
-
-        with (
-            patch.object(controller, "start_oauth_flow") as mock_oauth,
-        ):
-            mock_oauth.return_value = SetupResult(success=False, message="OAuth failed")
-
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.setup_wizard(None)
-
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_setup_wizard_server_failure(self, mock_rumps, mock_settings):
-        """Test setup_wizard when OAuth server fails."""
-        mock_settings.has_strava_credentials.return_value = True
-        mock_settings.has_refresh_token.return_value = False
-        controller = MenuBarController(settings=mock_settings)
-
-        with (
-            patch.object(controller, "start_oauth_flow") as mock_oauth,
-            patch("club_calendar_macos.menubar.run_oauth_server") as mock_server,
-        ):
-            mock_oauth.return_value = SetupResult(success=True, message="OK")
-            mock_server.return_value = SetupResult(success=False, message="Timeout")
-
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.setup_wizard(None)
-
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_setup_wizard_fetch_clubs_failure(self, mock_rumps, mock_settings):
-        """Test setup_wizard when fetching clubs fails."""
-        mock_settings.has_strava_credentials.return_value = True
-        mock_settings.has_refresh_token.return_value = True
-        controller = MenuBarController(settings=mock_settings)
-
-        with patch.object(controller, "fetch_clubs", return_value=None):
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.setup_wizard(None)
-
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_setup_wizard_no_clubs(self, mock_rumps, mock_settings):
-        """Test setup_wizard when no clubs found."""
-        mock_settings.has_strava_credentials.return_value = True
-        mock_settings.has_refresh_token.return_value = True
-        controller = MenuBarController(settings=mock_settings)
-
-        with patch.object(controller, "fetch_clubs", return_value=[]):
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.setup_wizard(None)
-
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_setup_wizard_cancel_clubs(self, mock_rumps, mock_settings):
-        """Test setup_wizard cancellation at club selection."""
-        mock_settings.has_strava_credentials.return_value = True
-        mock_settings.has_refresh_token.return_value = True
-        controller = MenuBarController(settings=mock_settings)
-
-        mock_clubs = [MagicMock(id=1, name="Club A", city="Portland")]
-
-        mock_response = MagicMock()
-        mock_response.clicked = False
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with (
-            patch.object(controller, "fetch_clubs", return_value=mock_clubs),
-            patch.object(controller, "save_club_ids") as mock_save,
-        ):
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.setup_wizard(None)
-
-            mock_save.assert_not_called()
-
-    def test_create_app_setup_wizard_invalid_club_selection(self, mock_rumps, mock_settings):
-        """Test setup_wizard with invalid club selection."""
-        mock_settings.has_strava_credentials.return_value = True
-        mock_settings.has_refresh_token.return_value = True
-        controller = MenuBarController(settings=mock_settings)
-
-        mock_clubs = [MagicMock(id=1, name="Club A", city="Portland")]
-
-        mock_response = MagicMock()
-        mock_response.clicked = True
-        mock_response.text = "invalid"
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with (
-            patch.object(controller, "fetch_clubs", return_value=mock_clubs),
-            patch.object(controller, "save_club_ids") as mock_save,
-        ):
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.setup_wizard(None)
-
-            mock_save.assert_not_called()
-            mock_rumps.notification.assert_called()
-
-    def test_create_app_setup_wizard_empty_selection(self, mock_rumps, mock_settings):
-        """Test setup_wizard with no clubs selected."""
-        mock_settings.has_strava_credentials.return_value = True
-        mock_settings.has_refresh_token.return_value = True
-        controller = MenuBarController(settings=mock_settings)
-
-        mock_clubs = [MagicMock(id=1, name="Club A", city="Portland")]
-
-        mock_response = MagicMock()
-        mock_response.clicked = True
-        mock_response.text = ""
-        mock_window = MagicMock()
-        mock_window.run.return_value = mock_response
-        mock_rumps.Window.return_value = mock_window
-
-        with (
-            patch.object(controller, "fetch_clubs", return_value=mock_clubs),
-            patch.object(controller, "save_club_ids") as mock_save,
-        ):
-            app = create_app(rumps_module=mock_rumps, controller=controller)
-            app.setup_wizard(None)
-
-            mock_save.assert_not_called()
             mock_rumps.notification.assert_called()
 
     def test_create_app_icon_path_found(self, mock_rumps, mock_settings, tmp_path):
