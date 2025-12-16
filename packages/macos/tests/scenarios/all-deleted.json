@@ -1,0 +1,15 @@
+{
+  "athlete": {
+    "id": 12345,
+    "firstname": "Test",
+    "lastname": "User"
+  },
+  "clubs": [
+    {"id": 1001, "name": "Morning Runners", "city": "London", "member_count": 50},
+    {"id": 1002, "name": "Evening Cyclists", "city": "London", "member_count": 30}
+  ],
+  "events": {
+    "1001": [],
+    "1002": []
+  }
+}

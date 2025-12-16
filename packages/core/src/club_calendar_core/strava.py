@@ -1,6 +1,7 @@
 """Strava API client for fetching club events."""
 
 import logging
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -14,9 +15,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_RETRIES = 3
 
-STRAVA_AUTH_URL = "https://www.strava.com/oauth/authorize"
-STRAVA_TOKEN_URL = "https://www.strava.com/oauth/token"
-STRAVA_API_URL = "https://www.strava.com/api/v3"
+# Strava URLs - can be overridden via env vars for testing
+STRAVA_AUTH_URL = os.environ.get("STRAVA_AUTH_URL", "https://www.strava.com/oauth/authorize")
+STRAVA_TOKEN_URL = os.environ.get("STRAVA_TOKEN_URL", "https://www.strava.com/oauth/token")
+STRAVA_API_URL = os.environ.get("STRAVA_API_URL", "https://www.strava.com/api/v3")
 
 
 class StravaError(Exception):

@@ -1,19 +1,19 @@
-"""Configuration management using JSON config + macOS Keychain for secrets."""
+"""Configuration management using YAML config file."""
 
-import json
 import logging
 import os
-import secrets as secrets_module
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypedDict
 
-import keyring
+import yaml
 from club_calendar_core.ports import TokenStore
 
 logger = logging.getLogger(__name__)
 
-# Keychain service name
-KEYCHAIN_SERVICE = "club-calendar"
+# Config schema version - bump when adding new fields or changing structure
+# Comment/example changes don't require version bump (will update on next save)
+CURRENT_SCHEMA_VERSION = 1
 
 
 def get_config_dir() -> Path:
@@ -32,43 +32,20 @@ def get_logs_dir() -> Path:
 
 def get_config_file() -> Path:
     """Get the path to the config file."""
-    return get_config_dir() / "config.json"
+    return get_config_dir() / "config.yaml"
 
 
-def _get_secret(key: str) -> str:
-    """Get a secret from keychain."""
-    try:
-        value = keyring.get_password(KEYCHAIN_SERVICE, key)
-        return value or ""
-    except Exception as e:
-        logger.warning(f"Failed to read from keychain ({key}): {e}")
-        return ""
-
-
-def _set_secret(key: str, value: str) -> None:
-    """Store a secret in keychain."""
-    try:
-        if value:
-            keyring.set_password(KEYCHAIN_SERVICE, key, value)
-        else:
-            # Delete if empty
-            try:
-                keyring.delete_password(KEYCHAIN_SERVICE, key)
-            except keyring.errors.PasswordDeleteError:
-                pass
-    except Exception as e:
-        logger.warning(f"Failed to write to keychain ({key}): {e}")
-
-
-class KeychainTokenStore(TokenStore):
-    """Token storage using macOS Keychain."""
+class ConfigTokenStore(TokenStore):
+    """Token storage using config file."""
 
     def get_refresh_token(self) -> str | None:
-        token = _get_secret("refresh_token")
-        return token if token else None
+        settings = Settings.load()
+        return settings.strava_refresh_token or None
 
     def save_refresh_token(self, token: str) -> None:
-        _set_secret("refresh_token", token)
+        settings = Settings.load()
+        settings.strava_refresh_token = token
+        settings.save()
 
     def get_access_token(self) -> tuple[str, int] | None:
         """Access tokens are short-lived and not persisted."""
@@ -79,34 +56,57 @@ class KeychainTokenStore(TokenStore):
         pass
 
 
+class ClubInfo(TypedDict):
+    """Club information stored in config."""
+
+    name: str
+    city: str | None
+    enabled: bool
+
+
 @dataclass
 class Settings:
-    """Application settings."""
+    """Application settings.
+
+    Config is city-based: clubs in configured cities are auto-enabled.
+    Users can manually enable/disable individual clubs via JSON config.
+
+    Schema versions:
+      v0: Unversioned (implicit for old configs without schema_version field)
+      v1: Initial versioned schema with examples/comments
+    """
+
+    # Schema version for migrations
+    schema_version: int = CURRENT_SCHEMA_VERSION
 
     # Strava API credentials
     strava_client_id: str = ""
     strava_client_secret: str = ""
     strava_refresh_token: str = ""
 
-    # Club configuration
-    club_ids: list[int] = field(default_factory=list)
-    club_city_filter: str = ""
+    # City filter - new clubs in these cities are auto-enabled
+    cities: list[str] = field(default_factory=list)
 
-    # Output configuration
-    output_dir: Path = field(default_factory=lambda: get_config_dir() / "calendars")
-    calendar_secret: str = ""
+    # Clubs dict: club_id -> {name, city, enabled}
+    # Persists enabled state between syncs
+    clubs: dict[str, ClubInfo] = field(default_factory=dict)
 
     # Sync configuration
     sync_interval_minutes: int = 60  # Default: 1 hour
 
-    def __post_init__(self):
-        """Generate calendar secret if not set."""
-        if not self.calendar_secret:
-            self.calendar_secret = secrets_module.token_urlsafe(24)
+    # Flooding prevention
+    max_events_per_club_per_week: int = 10  # Max events per club per week (0 = unlimited)
+    sync_weeks: int = 8  # How many weeks ahead to sync events
 
     def get_club_ids(self) -> list[int]:
-        """Return club IDs."""
-        return self.club_ids
+        """Return IDs of enabled clubs only."""
+        return [int(club_id) for club_id, info in self.clubs.items() if info.get("enabled", False)]
+
+    def get_enabled_clubs(self) -> dict[int, ClubInfo]:
+        """Return enabled clubs with their info."""
+        return {
+            int(club_id): info for club_id, info in self.clubs.items() if info.get("enabled", False)
+        }
 
     def has_strava_credentials(self) -> bool:
         """Check if Strava API credentials are configured."""
@@ -116,67 +116,170 @@ class Settings:
         """Check if refresh token is available."""
         return bool(self.strava_refresh_token)
 
-    def ensure_output_dir(self) -> Path:
-        """Create output directory with secret subdirectory."""
-        secret_dir = self.output_dir / self.calendar_secret
-        secret_dir.mkdir(parents=True, exist_ok=True)
-        return secret_dir
+    def has_clubs(self) -> bool:
+        """Check if any clubs are enabled."""
+        return len(self.get_club_ids()) > 0
+
+    def merge_clubs(self, fetched_clubs: list[dict]) -> int:
+        """Merge fetched clubs with existing config.
+
+        - Existing clubs: preserve enabled state
+        - New clubs: auto-enable if city in cities list (or all if no cities)
+
+        Args:
+            fetched_clubs: List of club dicts from Strava API with id, name, city
+
+        Returns:
+            Number of new clubs added
+        """
+        new_count = 0
+        cities_lower = [c.lower() for c in self.cities]
+
+        for club in fetched_clubs:
+            club_id = str(club["id"])
+            club_city = club.get("city") or ""
+
+            if club_id in self.clubs:
+                # Existing club - update name/city but preserve enabled
+                self.clubs[club_id]["name"] = club["name"]
+                self.clubs[club_id]["city"] = club_city
+            else:
+                # New club - auto-enable based on city filter
+                auto_enable = (
+                    not cities_lower  # No cities = enable all
+                    or club_city.lower() in cities_lower
+                )
+                self.clubs[club_id] = ClubInfo(
+                    name=club["name"],
+                    city=club_city,
+                    enabled=auto_enable,
+                )
+                new_count += 1
+                status = "enabled" if auto_enable else "disabled"
+                logger.info(f"New club: {club['name']} ({club_city}) - {status}")
+
+        return new_count
 
     def save(self) -> None:
-        """Save settings - secrets to keychain, rest to JSON."""
-        # Secrets go to keychain
-        _set_secret("client_secret", self.strava_client_secret)
-        _set_secret("refresh_token", self.strava_refresh_token)
+        """Save all settings to YAML config file."""
+        # Format cities as YAML with example
+        if self.cities:
+            cities_yaml = "\n".join(f"  - {city}" for city in self.cities)
+            cities_block = f"cities:\n{cities_yaml}"
+        else:
+            cities_block = """# City filter - auto-enable new clubs in these cities (empty = all)
+# Example:
+#   cities:
+#     - London
+#     - Manchester
+cities: []"""
 
-        # Non-secrets go to JSON
-        config = {
-            "strava_client_id": self.strava_client_id,
-            "club_ids": self.club_ids,
-            "club_city_filter": self.club_city_filter,
-            "output_dir": str(self.output_dir),
-            "calendar_secret": self.calendar_secret,
-            "sync_interval_minutes": self.sync_interval_minutes,
-        }
-        get_config_file().write_text(json.dumps(config, indent=2))
+        # Format clubs as YAML with example
+        if self.clubs:
+            clubs_lines = ["clubs:"]
+            for club_id, info in self.clubs.items():
+                city_str = info.get("city") or ""
+                enabled = "true" if info.get("enabled", False) else "false"
+                clubs_lines.append(f"  {club_id}:")
+                clubs_lines.append(f"    name: {info['name']}")
+                clubs_lines.append(f"    city: {city_str}")
+                clubs_lines.append(f"    enabled: {enabled}")
+            clubs_block = chr(10).join(clubs_lines)
+        else:
+            clubs_block = """# Clubs - populated after first sync
+# You can manually enable/disable clubs here
+# Example:
+#   clubs:
+#     123456:
+#       name: Morning Runners
+#       city: London
+#       enabled: true
+clubs: {}"""
+
+        content = f"""# Club Calendar Configuration
+# Schema version: {CURRENT_SCHEMA_VERSION} (do not edit manually)
+#
+# Setup:
+#   1. Go to https://www.strava.com/settings/api
+#   2. Create an app (any name, localhost callback URL)
+#   3. Copy Client ID and Client Secret below
+#   4. Save this file and click "Authenticate..." in the menu
+#
+# After authentication, click "Sync Now" to fetch your clubs.
+# New clubs matching your cities filter are auto-enabled.
+
+schema_version: {CURRENT_SCHEMA_VERSION}
+
+strava_client_id: {self.strava_client_id or '""'}
+strava_client_secret: {self.strava_client_secret or '""'}
+strava_refresh_token: {self.strava_refresh_token or '""'}  # auto-set after auth
+
+# Sync settings
+sync_interval_minutes: {self.sync_interval_minutes}
+sync_weeks: {self.sync_weeks}
+max_events_per_club_per_week: {self.max_events_per_club_per_week}  # 0 = unlimited
+
+{cities_block}
+
+{clubs_block}
+"""
+        get_config_file().write_text(content)
 
     @classmethod
     def load(cls) -> "Settings":
-        """Load settings from keychain + config file, with env var fallback."""
-        # Load JSON config
+        """Load settings from config file, with env var fallback."""
+        # Load YAML config
         config_file = get_config_file()
         config: dict = {}
         if config_file.exists():
-            try:
-                config = json.loads(config_file.read_text())
-            except json.JSONDecodeError:
+            content = config_file.read_text()
+            if not content.strip():
+                # Empty file - create fresh config
+                logger.info("Config file empty, creating fresh config")
+                cls().save()
                 config = {}
+            else:
+                try:
+                    config = yaml.safe_load(content) or {}
+                except yaml.YAMLError:
+                    # Corrupted config - comment it out and create fresh
+                    logger.warning("Config file corrupted, creating fresh config")
+                    commented = "\n".join(f"# {line}" for line in content.splitlines())
+                    header = "# === CORRUPTED CONFIG (commented out) ===\n"
+                    footer = "\n# === END CORRUPTED CONFIG ===\n\n"
+                    # Create fresh settings, save with corrupted content preserved
+                    fresh = cls()
+                    fresh.save()
+                    # Prepend corrupted content to saved file
+                    new_content = header + commented + footer + config_file.read_text()
+                    config_file.write_text(new_content)
+                    config = {}
 
-        # Get values: env vars > keychain/config
+        # Get values: env vars > config file
         strava_client_id = os.environ.get("STRAVA_CLIENT_ID") or config.get("strava_client_id", "")
-
-        # Secrets: env > keychain
-        strava_client_secret = os.environ.get("STRAVA_CLIENT_SECRET") or _get_secret(
-            "client_secret"
+        strava_client_secret = os.environ.get("STRAVA_CLIENT_SECRET") or config.get(
+            "strava_client_secret", ""
         )
-        strava_refresh_token = os.environ.get("STRAVA_REFRESH_TOKEN") or _get_secret(
-            "refresh_token"
+        strava_refresh_token = os.environ.get("STRAVA_REFRESH_TOKEN") or config.get(
+            "strava_refresh_token", ""
         )
 
-        # Club IDs: env var is comma-separated string, config is list
-        club_ids_env = os.environ.get("CLUB_IDS", "")
-        if club_ids_env:
-            club_ids = [int(x.strip()) for x in club_ids_env.split(",") if x.strip()]
+        # Cities filter (list)
+        cities_env = os.environ.get("CLUB_CITIES", "")
+        if cities_env:
+            cities = [c.strip() for c in cities_env.split(",") if c.strip()]
         else:
-            club_ids = config.get("club_ids", [])
+            cities = config.get("cities", [])
 
-        club_city_filter = os.environ.get("CLUB_CITY_FILTER") or config.get("club_city_filter", "")
+        # Clubs dict - convert integer keys to strings (YAML parses unquoted numbers as int)
+        raw_clubs = config.get("clubs", {})
+        clubs = {str(k): v for k, v in raw_clubs.items()} if raw_clubs else {}
 
-        # Output dir
-        output_dir_str = os.environ.get("OUTPUT_DIR") or config.get(
-            "output_dir", str(get_config_dir() / "calendars")
-        )
-
-        calendar_secret = os.environ.get("CALENDAR_SECRET") or config.get("calendar_secret", "")
+        # Migration: convert old club_ids to clubs dict if present
+        if "club_ids" in config and not clubs:
+            old_ids = config.get("club_ids", [])
+            for club_id in old_ids:
+                clubs[str(club_id)] = ClubInfo(name=f"Club {club_id}", city=None, enabled=True)
 
         # Sync interval
         sync_interval_env = os.environ.get("SYNC_INTERVAL_MINUTES", "")
@@ -185,16 +288,34 @@ class Settings:
         else:
             sync_interval_minutes = config.get("sync_interval_minutes", 60)
 
-        return cls(
+        # Flooding prevention
+        max_events_per_club_per_week = config.get("max_events_per_club_per_week", 10)
+        sync_weeks = config.get("sync_weeks", 8)
+
+        # Schema version (default to 0 for old unversioned configs)
+        schema_version = config.get("schema_version", 0)
+
+        settings = cls(
+            schema_version=schema_version,
             strava_client_id=strava_client_id,
             strava_client_secret=strava_client_secret,
             strava_refresh_token=strava_refresh_token,
-            club_ids=club_ids,
-            club_city_filter=club_city_filter,
-            output_dir=Path(output_dir_str),
-            calendar_secret=calendar_secret,
+            cities=cities,
+            clubs=clubs,
             sync_interval_minutes=sync_interval_minutes,
+            max_events_per_club_per_week=max_events_per_club_per_week,
+            sync_weeks=sync_weeks,
         )
+
+        # Auto-upgrade config if schema version is older
+        if schema_version < CURRENT_SCHEMA_VERSION:
+            logger.info(
+                f"Upgrading config from schema v{schema_version} to v{CURRENT_SCHEMA_VERSION}"
+            )
+            settings.schema_version = CURRENT_SCHEMA_VERSION
+            settings.save()
+
+        return settings
 
 
 def get_settings() -> Settings:
@@ -202,6 +323,6 @@ def get_settings() -> Settings:
     return Settings.load()
 
 
-def get_token_store() -> KeychainTokenStore:
+def get_token_store() -> ConfigTokenStore:
     """Get token store instance."""
-    return KeychainTokenStore()
+    return ConfigTokenStore()

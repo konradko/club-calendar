@@ -1,0 +1,47 @@
+{
+  "athlete": {
+    "id": 12345,
+    "firstname": "Test",
+    "lastname": "User"
+  },
+  "clubs": [
+    {"id": 1001, "name": "Morning Runners", "city": "London", "member_count": 50},
+    {"id": 1002, "name": "Evening Cyclists", "city": "London", "member_count": 30}
+  ],
+  "events": {
+    "1001": [
+      {
+        "id": 101,
+        "title": "Saturday Morning Run",
+        "description": "Weekly group run",
+        "address": "Hyde Park",
+        "route_id": null,
+        "upcoming_occurrences": ["+3d"],
+        "club": {"id": 1001, "name": "Morning Runners"},
+        "organizing_athlete": {"firstname": "Alice"}
+      },
+      {
+        "id": 102,
+        "title": "Sunday Long Run",
+        "description": "Long distance training",
+        "address": "Regent's Park",
+        "route_id": null,
+        "upcoming_occurrences": ["+4d"],
+        "club": {"id": 1001, "name": "Morning Runners"},
+        "organizing_athlete": {"firstname": "Bob"}
+      }
+    ],
+    "1002": [
+      {
+        "id": 201,
+        "title": "Tuesday Evening Ride",
+        "description": "After-work cycling",
+        "address": "Richmond Park",
+        "route_id": null,
+        "upcoming_occurrences": ["+5d"],
+        "club": {"id": 1002, "name": "Evening Cyclists"},
+        "organizing_athlete": {"firstname": "Charlie"}
+      }
+    ]
+  }
+}

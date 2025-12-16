@@ -5,15 +5,13 @@ import plistlib
 import subprocess
 import sys
 import webbrowser
-from datetime import datetime
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
 from urllib.parse import parse_qs, urlparse
 
 from club_calendar_core.service import ClubCalendarService, OAuthResult
-from club_calendar_core.service import SyncResult as CoreSyncResult
-from club_calendar_core.strava import Club
 
 from club_calendar_macos.config import (
     Settings,
@@ -22,17 +20,29 @@ from club_calendar_macos.config import (
     get_settings,
     get_token_store,
 )
+from club_calendar_macos.eventkit import sync_events_to_calendar
 from club_calendar_macos.models import CommandResult, SetupResult, SyncResult
 
-# Set up logging to file (macOS standard: ~/Library/Logs/)
+# Set up logging
 LOG_FILE = get_logs_dir() / "club-calendar.log"
+LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
+LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+# File handler (always)
 logging.basicConfig(
     filename=str(LOG_FILE),
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+    format=LOG_FORMAT,
+    datefmt=LOG_DATEFMT,
 )
 logger = logging.getLogger(__name__)
+
+# Console handler for dev mode (not running from .app bundle)
+if ".app/Contents/MacOS" not in sys.executable:
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.setFormatter(logging.Formatter(LOG_FORMAT, LOG_DATEFMT))
+    logging.getLogger().addHandler(console)
 
 
 def _create_service(settings: Settings) -> ClubCalendarService:
@@ -84,10 +94,21 @@ class MenuBarController:
             return ("Missing Strava credentials", False)
         if not self.settings.has_refresh_token():
             return ("Not authenticated", False)
-        if not self.settings.get_club_ids():
-            return ("No clubs configured", False)
-        club_count = len(self.settings.get_club_ids())
-        return (f"{club_count} club(s) configured", True)
+
+        # Show cities and enabled clubs
+        cities = self.settings.cities
+        enabled_count = len(self.settings.get_club_ids())
+        total_count = len(self.settings.clubs)
+
+        if total_count == 0:
+            msg = "Ready to sync (will fetch clubs)"
+        elif enabled_count == 0:
+            msg = f"{total_count} clubs (none enabled)"
+        else:
+            city_info = f"Cities: {', '.join(cities)}" if cities else "All cities"
+            msg = f"{enabled_count}/{total_count} clubs enabled • {city_info}"
+
+        return (msg, True)
 
     def needs_setup(self) -> bool:
         """Check if initial setup is needed."""
@@ -98,40 +119,200 @@ class MenuBarController:
         return self.settings.has_strava_credentials() and not self.settings.has_refresh_token()
 
     def needs_clubs(self) -> bool:
-        """Check if club selection is needed."""
-        return (
-            self.settings.has_strava_credentials()
-            and self.settings.has_refresh_token()
-            and not self.settings.get_club_ids()
-        )
+        """Check if club configuration is needed.
+
+        With auto-fetch, this is no longer a setup step - clubs are fetched on first sync.
+        Returns False since clubs are managed via config file.
+        """
+        return False
 
     def is_ready(self) -> bool:
-        """Check if app is fully configured and ready to sync."""
-        return (
-            self.settings.has_strava_credentials()
-            and self.settings.has_refresh_token()
-            and bool(self.settings.get_club_ids())
-        )
+        """Check if app is fully configured and ready to sync.
+
+        Only requires credentials and auth - clubs are auto-fetched on sync.
+        """
+        return self.settings.has_strava_credentials() and self.settings.has_refresh_token()
+
+    def validate_strava_access(self) -> tuple[bool, str]:
+        """Validate Strava API access by making a test request.
+
+        Returns:
+            Tuple of (success, message)
+        """
+        if not self.settings.has_strava_credentials():
+            return False, "Missing Strava credentials"
+        if not self.settings.has_refresh_token():
+            return False, "Not authenticated with Strava"
+
+        try:
+            # Try to fetch clubs as a test - this validates token and API access
+            clubs = self.service.get_clubs()
+            return True, f"Connected ({len(clubs)} clubs)"
+        except Exception as e:
+            error_msg = str(e)[:100]
+            logger.error(f"Strava validation failed: {error_msg}")
+            return False, f"Strava error: {error_msg}"
+
+    def validate_calendar_access(self) -> tuple[bool, str]:
+        """Validate Apple Calendar access.
+
+        Returns:
+            Tuple of (success, message)
+        """
+        from club_calendar_macos.eventkit import request_calendar_access
+
+        try:
+            granted, error = request_calendar_access()
+            if granted:
+                return True, "Calendar access granted"
+            else:
+                return False, error or "Calendar access denied"
+        except Exception as e:
+            error_msg = str(e)[:100]
+            logger.error(f"Calendar validation failed: {error_msg}")
+            return False, f"Calendar error: {error_msg}"
+
+    def validate_all(self) -> list[tuple[str, bool, str]]:
+        """Validate all connections before sync.
+
+        Returns:
+            List of (check_name, success, message) tuples
+        """
+        results = []
+
+        # Check Strava
+        strava_ok, strava_msg = self.validate_strava_access()
+        results.append(("Strava", strava_ok, strava_msg))
+
+        # Check Calendar
+        calendar_ok, calendar_msg = self.validate_calendar_access()
+        results.append(("Calendar", calendar_ok, calendar_msg))
+
+        return results
 
     def run_sync(self) -> SyncResult:
-        """Run the sync operation using the service."""
+        """Run the sync operation - fetches clubs, events, and syncs to Apple Calendar.
+
+        Flow:
+        1. Fetch all user's clubs from Strava
+        2. Merge with existing config (preserving enabled state)
+        3. Save updated config
+        4. Fetch events for enabled clubs only
+        5. Apply flooding prevention filters
+        6. Sync to Apple Calendar
+        """
         logger.info("Starting sync...")
         try:
+            # Step 1: Fetch all user's clubs
+            clubs = self.service.get_clubs()
+            logger.info(f"Fetched {len(clubs)} clubs from Strava")
+
+            # Step 2: Merge with config
+            new_clubs = self.settings.merge_clubs(
+                [{"id": c.id, "name": c.name, "city": c.city} for c in clubs]
+            )
+            if new_clubs > 0:
+                logger.info(f"Added {new_clubs} new clubs to config")
+
+            # Step 3: Save config
+            self.settings.save()
+
+            # Step 4: Get enabled club IDs
             club_ids = self.settings.get_club_ids()
-            output_dir = self.settings.ensure_output_dir()
-            result: CoreSyncResult = self.service.sync_to_files(club_ids, output_dir)
+            if not club_ids:
+                return SyncResult(
+                    success=True,
+                    message="No clubs enabled. Edit config to enable clubs.",
+                )
+
+            # Step 5: Fetch events from enabled clubs
+            events = self.service.get_club_events(club_ids)
+            logger.info(f"Fetched {len(events)} events from {len(club_ids)} enabled clubs")
+
+            # Step 6: Apply flooding prevention filters
+            events = self._filter_events(events)
+
+            # Step 7: Sync to Apple Calendar
+            result = sync_events_to_calendar(events)
 
             if result.success:
                 self.last_sync = datetime.now()
-                logger.info(f"Sync completed: {result.event_count} events")
-                return SyncResult(success=True, message=result.message)
+                logger.info(f"Sync completed: {result.events_added} events")
+
+                # Build notification message with event details
+                message = self._build_sync_message(events, result.events_added)
+                return SyncResult(success=True, message=message)
             else:
                 logger.error(f"Sync failed: {result.message}")
                 return SyncResult(success=False, message=result.message)
-        except OSError as e:
-            # File system errors (config read, output dir creation)
-            logger.error(f"File error during sync: {e}")
-            return SyncResult(success=False, message=f"File error: {e}")
+        except Exception as e:
+            logger.error(f"Sync error: {e}")
+            return SyncResult(success=False, message=str(e)[:100])
+
+    def _filter_events(self, events: list) -> list:
+        """Apply flooding prevention filters.
+
+        Filters by:
+        - sync_weeks: Only include events within N weeks
+        - max_events_per_club_per_week: Limit events per club per week (0 = unlimited)
+        """
+        from datetime import timedelta
+
+        weeks = self.settings.sync_weeks
+        max_per_week = self.settings.max_events_per_club_per_week
+
+        # Filter by sync_weeks
+        if weeks > 0:
+            cutoff = datetime.now(UTC) + timedelta(weeks=weeks)
+            original_count = len(events)
+            events = [e for e in events if e.start_datetime <= cutoff]
+            if len(events) < original_count:
+                logger.info(f"Filtered to {len(events)} events within {weeks} weeks")
+
+        # Sort by date
+        events = sorted(events, key=lambda e: e.start_datetime)
+
+        # Limit per club per week
+        if max_per_week > 0:
+            # Key: (club_id, year, week_number)
+            week_counts: dict[tuple[int, int, int], int] = {}
+            filtered = []
+            for event in events:
+                year, week_num, _ = event.start_datetime.isocalendar()
+                key = (event.club_id, year, week_num)
+                count = week_counts.get(key, 0)
+                if count < max_per_week:
+                    filtered.append(event)
+                    week_counts[key] = count + 1
+            if len(filtered) < len(events):
+                logger.info(f"Limited to {len(filtered)} events ({max_per_week}/club/week)")
+            events = filtered
+
+        return events
+
+    def _build_sync_message(self, events: list, added_count: int) -> str:
+        """Build notification message with event details.
+
+        - 0 events: "No upcoming events"
+        - 1-2 events: Show event titles
+        - 3+ events: Show club names with counts
+        """
+        if added_count == 0:
+            return "No upcoming events found"
+
+        if len(events) <= 2:
+            # Show event titles
+            titles = [e.title for e in events]
+            return " | ".join(titles)
+        else:
+            # Group by club and show counts
+            club_counts: dict[str, int] = {}
+            for event in events:
+                club_name = event.club_name or "Unknown"
+                club_counts[club_name] = club_counts.get(club_name, 0) + 1
+
+            parts = [f"{name}: {count}" for name, count in sorted(club_counts.items())]
+            return f"{added_count} events • " + ", ".join(parts)
 
     def run_auth(self) -> CommandResult:
         """Run the auth command in Terminal."""
@@ -139,15 +320,6 @@ class MenuBarController:
         try:
             subprocess.run(["osascript", "-e", script], check=True)
             return CommandResult(success=True, output="Opening Terminal for authentication...")
-        except Exception as e:
-            return CommandResult(success=False, output=str(e))
-
-    def run_clubs_setup(self) -> CommandResult:
-        """Run the clubs --save command in Terminal."""
-        script = 'tell app "Terminal" to do script "club-calendar clubs --save"'
-        try:
-            subprocess.run(["osascript", "-e", script], check=True)
-            return CommandResult(success=True, output="Opening Terminal for club selection...")
         except Exception as e:
             return CommandResult(success=False, output=str(e))
 
@@ -163,14 +335,6 @@ class MenuBarController:
         if not LOG_FILE.exists():
             LOG_FILE.touch()
         subprocess.run(["open", str(LOG_FILE)])
-
-    def get_output_dir(self) -> Path:
-        """Get the output directory path."""
-        return self.settings.ensure_output_dir()
-
-    def open_output_folder(self) -> None:
-        """Open the output folder in Finder."""
-        subprocess.run(["open", str(self.get_output_dir())])
 
     def reload_settings(self) -> None:
         """Reload settings from config file."""
@@ -214,27 +378,6 @@ class MenuBarController:
             self.settings.save()
             self._refresh_service()
             return SetupResult(success=True, message="Authentication complete")
-        except Exception as e:
-            return SetupResult(success=False, message=str(e)[:100])
-
-    def fetch_clubs(self) -> list[Club] | None:
-        """Fetch list of clubs from Strava API."""
-        try:
-            clubs = self.service.get_clubs()
-            # Filter to local clubs if city filter is set
-            if self.settings.club_city_filter:
-                cities = [c.strip().lower() for c in self.settings.club_city_filter.split(",")]
-                clubs = [c for c in clubs if (c.city or "").lower() in cities]
-            return clubs
-        except Exception:
-            return None
-
-    def save_club_ids(self, club_ids: list[int]) -> SetupResult:
-        """Save selected club IDs."""
-        try:
-            self.settings.club_ids = club_ids
-            self.settings.save()
-            return SetupResult(success=True, message=f"Saved {len(club_ids)} club(s)")
         except Exception as e:
             return SetupResult(success=False, message=str(e)[:100])
 
@@ -349,6 +492,8 @@ class MenuBarController:
         """Check if enough time has passed for auto-sync."""
         if not self.is_ready():
             return False
+        if self.settings.sync_interval_minutes == 0:
+            return False  # Auto-sync disabled
         if self.last_sync is None:
             return True
         elapsed = (datetime.now() - self.last_sync).total_seconds() / 60
@@ -481,21 +626,38 @@ def create_app(rumps_module=None, controller=None):
     rumps = rumps_module or _import_rumps()
     controller = controller or MenuBarController()
 
+    def notify(title, subtitle="", message=""):
+        """Send notification, ignoring errors in dev mode (no Info.plist)."""
+        try:
+            rumps.notification(title=title, subtitle=subtitle, message=message)
+        except RuntimeError:
+            # No bundle identifier - running in dev mode
+            logger.info(f"Notification (dev): {subtitle} - {message}")
+
     class ClubCalendarApp(rumps.App):
         """Menu bar app for syncing Strava club events."""
 
         def __init__(self):
-            # Look for icon in common locations
+            # Look for menu bar icon in common locations
+            # Template images (ending in "Template") auto-tint for light/dark mode
             icon_path = None
             for path in [
-                Path(__file__).parents[4] / "icon.png",  # Development (repo root)
-                Path(sys.executable).parent / "icon.png",  # PyInstaller bundle
+                Path(__file__).parents[4]
+                / "deploy"
+                / "macos-menubar"
+                / "icon_menubarTemplate.png",  # Dev
+                Path(sys.executable).parent / "icon_menubarTemplate.png",  # PyInstaller bundle
             ]:
                 if path.exists():
                     icon_path = str(path)
                     break
 
-            super().__init__("Club Calendar", icon=icon_path, title="📅" if not icon_path else None)
+            super().__init__(
+                "Club Calendar",
+                icon=icon_path,
+                template=True,
+                title="📅" if not icon_path else None,
+            )
             self.controller = controller
             self._update_menu()
 
@@ -504,73 +666,75 @@ def create_app(rumps_module=None, controller=None):
             self.menu.clear()
 
             if self.controller.is_ready():
-                # === Configured state ===
-                # Status line
-                self.menu.add(rumps.MenuItem(self.controller.get_status_text(), callback=None))
-                club_count = len(self.controller.settings.get_club_ids())
-                self.menu.add(rumps.MenuItem(f"✓ {club_count} club(s)", callback=None))
-                self.menu.add(rumps.separator)
-
                 # Main actions
                 self.menu.add(rumps.MenuItem("Sync Now", callback=self.sync_now))
-                self.menu.add(rumps.MenuItem("Open Calendars", callback=self.open_folder))
+                self.menu.add(rumps.MenuItem("Open Calendar", callback=self.open_calendar))
                 self.menu.add(rumps.separator)
 
-                # Settings submenu
-                settings_menu = rumps.MenuItem("Settings")
-                settings_menu.add(rumps.MenuItem("Change Clubs...", callback=self.run_clubs))
-                settings_menu.add(rumps.MenuItem("Re-authenticate...", callback=self.run_auth))
-                settings_menu.add(rumps.separator)
+                # Status
+                self.menu.add(rumps.MenuItem(self.controller.get_status_text(), callback=None))
+                club_count = len(self.controller.settings.get_club_ids())
+                if club_count > 0:
+                    self.menu.add(rumps.MenuItem(f"{club_count} club(s) enabled", callback=None))
+                else:
+                    self.menu.add(rumps.MenuItem("Sync to fetch clubs", callback=None))
+                self.menu.add(rumps.MenuItem("✓ Authenticated", callback=self.run_auth))
+                self.menu.add(rumps.separator)
 
-                # Sync interval submenu
+                # Sync interval
                 interval_menu = rumps.MenuItem("Sync Interval")
                 current_interval = self.controller.get_sync_interval()
                 for minutes, label in [
-                    (15, "15 minutes"),
-                    (30, "30 minutes"),
+                    (0, "Disabled"),
+                    (15, "15 min"),
+                    (30, "30 min"),
                     (60, "1 hour"),
                     (120, "2 hours"),
-                    (240, "4 hours"),
                 ]:
                     item = rumps.MenuItem(
-                        label,
-                        callback=lambda _, m=minutes: self.set_sync_interval(m),
+                        label, callback=lambda _, m=minutes: self.set_sync_interval(m)
                     )
                     item.state = current_interval == minutes
                     interval_menu.add(item)
-                settings_menu.add(interval_menu)
+                self.menu.add(interval_menu)
 
-                settings_menu.add(rumps.MenuItem("Edit Config File...", callback=self.edit_config))
-                self.menu.add(settings_menu)
+                self.menu.add(rumps.MenuItem("Edit Config...", callback=self.edit_config))
+                self.menu.add(rumps.MenuItem("Validate Setup...", callback=self.validate_setup))
+            elif not self.controller.settings.has_strava_credentials():
+                # Step 1: Need credentials - click opens config
+                self.menu.add(
+                    rumps.MenuItem("⚙️ Set Strava Credentials...", callback=self.edit_config)
+                )
+                self.menu.add(rumps.MenuItem("Reload Settings", callback=self.reload_settings))
             else:
-                # === Not configured state ===
-                message, _ = self.controller.get_config_status()
-                self.menu.add(rumps.MenuItem(f"⚠️ {message}", callback=None))
+                # Step 2: Have credentials, need auth - click starts OAuth
+                self.menu.add(
+                    rumps.MenuItem("🔗 Authenticate with Strava...", callback=self.run_auth)
+                )
                 self.menu.add(rumps.separator)
-                self.menu.add(rumps.MenuItem("Run Setup Wizard...", callback=self.setup_wizard))
+                self.menu.add(rumps.MenuItem("Edit Config...", callback=self.edit_config))
+                self.menu.add(rumps.MenuItem("Reload Settings", callback=self.reload_settings))
 
             self.menu.add(rumps.separator)
+            self.menu.add(rumps.MenuItem("View Logs...", callback=self.view_logs))
             login_item = rumps.MenuItem("Start at Login", callback=self.toggle_login)
             login_item.state = self.controller.is_login_enabled()
             self.menu.add(login_item)
-            self.menu.add(rumps.MenuItem("View Logs...", callback=self.view_logs))
-            self.menu.add(rumps.MenuItem("Quit", callback=self.quit_app))
 
-        @rumps.clicked("Sync Now")
         def sync_now(self, _) -> None:
             """Run sync command."""
             result = self.controller.run_sync()
             if result.success:
                 self._update_menu()
-                rumps.notification(
+                notify(
                     title="Club Calendar",
-                    subtitle="Sync complete",
+                    subtitle="Calendar Updated",
                     message=result.message,
                 )
             else:
-                rumps.notification(
+                notify(
                     title="Club Calendar",
-                    subtitle="Sync failed",
+                    subtitle="Sync Failed",
                     message=result.message,
                 )
 
@@ -587,111 +751,35 @@ def create_app(rumps_module=None, controller=None):
                 else:
                     # Only notify on failure
                     logger.warning(f"Auto-sync failed: {result.message}")
-                    rumps.notification(
+                    notify(
                         title="Club Calendar",
                         subtitle="Auto-sync failed",
                         message=result.message,
                     )
 
-        @rumps.clicked("Open Calendar Folder")
-        def open_folder(self, _) -> None:
-            """Open the output folder in Finder."""
-            self.controller.open_output_folder()
+        def open_calendar(self, _) -> None:
+            """Open the Apple Calendar app."""
+            import subprocess
 
-        @rumps.clicked("Configure Strava API...")
-        def configure_api(self, _) -> None:
-            """Show dialog to configure Strava API credentials and authenticate."""
-            existing_id = self.controller.settings.strava_client_id or ""
-            existing_secret = self.controller.settings.strava_client_secret or ""
+            subprocess.run(["open", "-a", "Calendar"])
 
-            # Build default text with both fields
-            if existing_id or existing_secret:
-                default_text = f"{existing_id}\n{existing_secret}"
-            else:
-                default_text = ""
-
-            window = rumps.Window(
-                message=(
-                    "Enter your Strava API credentials\n"
-                    "(from strava.com/settings/api)\n\n"
-                    "Line 1: Client ID\n"
-                    "Line 2: Client Secret"
-                ),
-                title="Strava API Setup",
-                default_text=default_text,
-                ok="Authenticate",
-                cancel="Cancel",
-                dimensions=(320, 60),
-            )
-            response = window.run()
-            if not response.clicked:
-                return
-
-            # Parse two lines
-            lines = response.text.strip().split("\n")
-            if len(lines) < 2:
-                rumps.notification(
-                    "Club Calendar", "Error", "Enter Client ID on line 1, Secret on line 2"
-                )
-                return
-
-            client_id = lines[0].strip()
-            client_secret = lines[1].strip()
-
-            if not client_id or not client_secret:
-                rumps.notification("Club Calendar", "Error", "Both ID and secret required")
-                return
-
-            # Save credentials
-            save_result = self.controller.save_credentials(client_id, client_secret)
-            if not save_result.success:
-                rumps.notification("Club Calendar", "Error", save_result.message)
-                return
-
-            self._update_menu()
-
-            # Auto-trigger OAuth
-            oauth_result = self.controller.start_oauth_flow()
-            if not oauth_result.success:
-                rumps.notification("Club Calendar", "Error", oauth_result.message)
-                return
-
-            rumps.notification(
-                "Club Calendar",
-                "Authentication",
-                "Complete authentication in your browser...",
-            )
-
-            # Run OAuth server in background thread
-            def handle_oauth():
-                server_result = run_oauth_server(self.controller)
-                self._update_menu()
-                rumps.notification(
-                    "Club Calendar",
-                    "Authentication" if server_result.success else "Error",
-                    server_result.message,
-                )
-
-            Thread(target=handle_oauth, daemon=True).start()
-
-        @rumps.clicked("Authenticate with Strava...")
         def run_auth(self, _) -> None:
-            """Run OAuth authentication flow (re-auth only)."""
+            """Run OAuth authentication flow."""
             if not self.controller.settings.has_strava_credentials():
-                rumps.notification(
+                notify(
                     "Club Calendar",
                     "Setup Required",
-                    "Use 'Configure Strava API...' first",
+                    "Add strava_client_id and strava_client_secret to config file first",
                 )
                 return
 
             # Start OAuth flow
             result = self.controller.start_oauth_flow()
             if not result.success:
-                rumps.notification("Club Calendar", "Error", result.message)
+                notify("Club Calendar", "Error", result.message)
                 return
 
-            rumps.notification(
+            notify(
                 "Club Calendar",
                 "Authentication",
                 "Complete authentication in your browser...",
@@ -701,7 +789,7 @@ def create_app(rumps_module=None, controller=None):
             def handle_oauth():
                 oauth_result = run_oauth_server(self.controller)
                 self._update_menu()
-                rumps.notification(
+                notify(
                     "Club Calendar",
                     "Authentication" if oauth_result.success else "Error",
                     oauth_result.message,
@@ -709,191 +797,20 @@ def create_app(rumps_module=None, controller=None):
 
             Thread(target=handle_oauth, daemon=True).start()
 
-        @rumps.clicked("Select Clubs...")
-        def run_clubs(self, _) -> None:
-            """Show dialog to select clubs."""
-            if not self.controller.settings.has_refresh_token():
-                rumps.notification(
-                    "Club Calendar",
-                    "Setup Required",
-                    "Authenticate with Strava first",
-                )
-                return
-
-            clubs = self.controller.fetch_clubs()
-            if clubs is None:
-                rumps.notification("Club Calendar", "Error", "Failed to fetch clubs")
-                return
-
-            if not clubs:
-                rumps.notification("Club Calendar", "No Clubs", "No clubs found")
-                return
-
-            # Show clubs list with checkboxes via alert
-            club_names = [f"{c.name} ({c.city or 'Unknown'})" for c in clubs]
-            club_list = "\n".join(f"{i + 1}. {name}" for i, name in enumerate(club_names))
-
-            window = rumps.Window(
-                message=f"Enter club numbers to sync (comma-separated):\n\n{club_list}",
-                title="Select Clubs",
-                default_text=",".join(str(i + 1) for i in range(len(clubs))),
-                ok="Save",
-                cancel="Cancel",
-            )
-            response = window.run()
-            if not response.clicked:
-                return
-
-            # Parse selection
-            try:
-                selections = [int(x.strip()) for x in response.text.split(",") if x.strip()]
-                selected_ids = [clubs[i - 1].id for i in selections if 1 <= i <= len(clubs)]
-            except (ValueError, IndexError):
-                rumps.notification("Club Calendar", "Error", "Invalid selection")
-                return
-
-            if not selected_ids:
-                rumps.notification("Club Calendar", "Error", "No clubs selected")
-                return
-
-            result = self.controller.save_club_ids(selected_ids)
-            self._update_menu()
-            rumps.notification(
-                title="Club Calendar",
-                subtitle="Club Selection",
-                message=result.message,
-            )
-
-        @rumps.clicked("Reload Settings")
         def reload_settings(self, _) -> None:
             """Reload settings and update menu."""
             self.controller.reload_settings()
             self._update_menu()
-            rumps.notification(
+            notify(
                 title="Club Calendar",
                 subtitle="Settings Reloaded",
                 message="Configuration updated",
             )
 
-        @rumps.clicked("Edit Config File...")
         def edit_config(self, _) -> None:
             """Open config file in default editor."""
             self.controller.open_config_file()
 
-        @rumps.clicked("Run Setup Wizard...")
-        def setup_wizard(self, _) -> None:
-            """Run the setup wizard - guides through all setup steps."""
-            logger.info("Starting setup wizard")
-
-            # Step 1: Credentials
-            if not self.controller.settings.has_strava_credentials():
-                window = rumps.Window(
-                    message=(
-                        "Welcome to Club Calendar!\n\n"
-                        "Step 1: Enter your Strava API credentials\n"
-                        "(Get them from strava.com/settings/api)\n\n"
-                        "Line 1: Client ID\n"
-                        "Line 2: Client Secret"
-                    ),
-                    title="Setup Wizard - Step 1/3",
-                    default_text="",
-                    ok="Next",
-                    cancel="Cancel",
-                    dimensions=(320, 60),
-                )
-                response = window.run()
-                if not response.clicked:
-                    return
-
-                lines = response.text.strip().split("\n")
-                if len(lines) < 2:
-                    rumps.notification("Club Calendar", "Error", "Enter both ID and Secret")
-                    return
-
-                client_id = lines[0].strip()
-                client_secret = lines[1].strip()
-
-                if not client_id or not client_secret:
-                    rumps.notification("Club Calendar", "Error", "Both fields required")
-                    return
-
-                result = self.controller.save_credentials(client_id, client_secret)
-                if not result.success:
-                    rumps.notification("Club Calendar", "Error", result.message)
-                    return
-                logger.info("Credentials saved")
-
-            # Step 2: OAuth
-            if not self.controller.settings.has_refresh_token():
-                rumps.notification(
-                    "Club Calendar",
-                    "Step 2/3: Authentication",
-                    "Opening browser to authorize with Strava...",
-                )
-
-                oauth_result = self.controller.start_oauth_flow()
-                if not oauth_result.success:
-                    rumps.notification("Club Calendar", "Error", oauth_result.message)
-                    return
-
-                # Wait for OAuth callback
-                server_result = run_oauth_server(self.controller)
-                if not server_result.success:
-                    rumps.notification("Club Calendar", "Error", server_result.message)
-                    return
-                logger.info("OAuth completed")
-
-            # Step 3: Select clubs
-            rumps.notification(
-                "Club Calendar",
-                "Step 3/3: Select Clubs",
-                "Fetching your clubs...",
-            )
-
-            clubs = self.controller.fetch_clubs()
-            if clubs is None:
-                rumps.notification("Club Calendar", "Error", "Failed to fetch clubs")
-                return
-
-            if not clubs:
-                rumps.notification("Club Calendar", "Error", "No clubs found")
-                return
-
-            club_names = [f"{c.name} ({c.city or 'Unknown'})" for c in clubs]
-            club_list = "\n".join(f"{i + 1}. {name}" for i, name in enumerate(club_names))
-
-            window = rumps.Window(
-                message=f"Select clubs to sync (comma-separated numbers):\n\n{club_list}",
-                title="Setup Wizard - Step 3/3",
-                default_text=",".join(str(i + 1) for i in range(len(clubs))),
-                ok="Finish",
-                cancel="Cancel",
-            )
-            response = window.run()
-            if not response.clicked:
-                return
-
-            try:
-                selections = [int(x.strip()) for x in response.text.split(",") if x.strip()]
-                selected_ids = [clubs[i - 1].id for i in selections if 1 <= i <= len(clubs)]
-            except (ValueError, IndexError):
-                rumps.notification("Club Calendar", "Error", "Invalid selection")
-                return
-
-            if not selected_ids:
-                rumps.notification("Club Calendar", "Error", "No clubs selected")
-                return
-
-            result = self.controller.save_club_ids(selected_ids)
-            self._update_menu()
-            logger.info(f"Setup complete - {len(selected_ids)} clubs configured")
-            rumps.notification(
-                "Club Calendar",
-                "Setup Complete!",
-                f"{len(selected_ids)} club(s) configured. Click 'Sync Now' to fetch events.",
-            )
-
-        @rumps.clicked("Start at Login")
         def toggle_login(self, sender) -> None:
             """Toggle start at login setting."""
             if self.controller.is_login_enabled():
@@ -902,7 +819,7 @@ def create_app(rumps_module=None, controller=None):
                 result = self.controller.enable_login()
 
             self._update_menu()
-            rumps.notification(
+            notify(
                 title="Club Calendar",
                 subtitle="Start at Login",
                 message=result.message,
@@ -912,18 +829,45 @@ def create_app(rumps_module=None, controller=None):
             """Set the sync interval."""
             result = self.controller.set_sync_interval(minutes)
             self._update_menu()
-            rumps.notification(
+            notify(
                 title="Club Calendar",
                 subtitle="Sync Interval",
                 message=result.message,
             )
 
-        @rumps.clicked("View Logs...")
         def view_logs(self, _) -> None:
             """Open log file."""
             self.controller.view_logs()
 
-        @rumps.clicked("Quit")
+        def validate_setup(self, _) -> None:
+            """Validate Strava and Calendar connections."""
+            notify(
+                "Club Calendar",
+                "Validating...",
+                "Checking Strava and Calendar access",
+            )
+
+            results = self.controller.validate_all()
+            all_ok = all(ok for _, ok, _ in results)
+
+            if all_ok:
+                messages = [f"✓ {name}: {msg}" for name, ok, msg in results]
+                notify(
+                    "Club Calendar",
+                    "Setup Valid",
+                    " | ".join(messages),
+                )
+            else:
+                # Show first failure
+                for name, ok, msg in results:
+                    if not ok:
+                        notify(
+                            "Club Calendar",
+                            f"{name} Error",
+                            msg,
+                        )
+                        break
+
         def quit_app(self, _) -> None:
             """Quit the application."""
             rumps.quit_application()
