@@ -1,25 +1,16 @@
 """EventKit integration for syncing events to Apple Calendar."""
 
 import logging
-from dataclasses import dataclass
 from datetime import timedelta
 
 from club_calendar_core.strava import ClubEvent
+
+from club_calendar_macos.models import SyncResult
 
 logger = logging.getLogger(__name__)
 
 # Default calendar name (can be overridden via settings)
 DEFAULT_CALENDAR_NAME = "Club Calendar"
-
-
-@dataclass
-class SyncResult:
-    """Result of calendar sync operation."""
-
-    success: bool
-    message: str
-    events_added: int = 0
-    events_removed: int = 0
 
 
 def _import_eventkit():

@@ -273,8 +273,6 @@ class MenuBarController:
         - sync_weeks: Only include events within N weeks
         - max_events_per_club_per_week: Limit events per club per week (0 = unlimited)
         """
-        from datetime import timedelta
-
         weeks = self.settings.sync_weeks
         max_per_week = self.settings.max_events_per_club_per_week
 
@@ -687,13 +685,16 @@ def create_app(rumps_module=None, controller=None):
             # Look for menu bar icon in common locations
             # Template images (ending in "Template") auto-tint for light/dark mode
             icon_path = None
-            for path in [
+            search_paths = [
                 Path(__file__).parents[4]
                 / "deploy"
                 / "macos-menubar"
                 / "icon_menubarTemplate.png",  # Dev
-                Path(sys.executable).parent / "icon_menubarTemplate.png",  # PyInstaller bundle
-            ]:
+            ]
+            # PyInstaller bundle: check _MEIPASS (frozen app resources)
+            if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+                search_paths.insert(0, Path(sys._MEIPASS) / "icon_menubarTemplate.png")
+            for path in search_paths:
                 if path.exists():
                     icon_path = str(path)
                     break

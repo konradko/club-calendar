@@ -203,7 +203,7 @@ cities: []"""
                 clubs_lines.append(f"    name: {name_quoted}")
                 clubs_lines.append(f"    city: {city_quoted}")
                 clubs_lines.append(f"    enabled: {enabled}")
-            clubs_block = chr(10).join(clubs_lines)
+            clubs_block = "\n".join(clubs_lines)
         else:
             clubs_block = """# Clubs - populated after first sync
 # You can manually enable/disable clubs here

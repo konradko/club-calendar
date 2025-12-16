@@ -183,11 +183,13 @@ class StravaClient:
 
     def _ensure_access_token(self) -> str:
         """Ensure we have a valid access token."""
-        if self._access_token and self._token_expires_at > datetime.now().timestamp() + 60:
+        if self._access_token and self._token_expires_at > datetime.now(UTC).timestamp() + 60:
             return self._access_token
         if self._refresh_token:
             self.refresh_access_token()
-            return self._access_token  # type: ignore
+            if self._access_token is None:
+                raise StravaAuthError("Failed to obtain access token after refresh")
+            return self._access_token
         raise StravaAuthError("No valid access token and no refresh token to obtain one")
 
     def _handle_response_errors(self, response: httpx.Response) -> None:

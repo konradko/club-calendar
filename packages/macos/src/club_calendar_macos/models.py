@@ -9,6 +9,8 @@ class SyncResult:
 
     success: bool
     message: str
+    events_added: int = 0
+    events_removed: int = 0
 
 
 @dataclass
