@@ -649,10 +649,7 @@ def create_app(rumps_module=None, controller=None):
             # Template images (ending in "Template") auto-tint for light/dark mode
             icon_path = None
             search_paths = [
-                Path(__file__).parents[4]
-                / "deploy"
-                / "macos-menubar"
-                / "icon_menubarTemplate.png",  # Dev
+                Path(__file__).parents[4] / "deploy" / "icon_menubarTemplate.png",  # Dev
             ]
             # PyInstaller bundle: check _MEIPASS (frozen app resources)
             if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
