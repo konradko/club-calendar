@@ -218,6 +218,7 @@ strava_refresh_token: {self.strava_refresh_token or '""'}  # auto-set after auth
 
 # Sync settings
 sync_interval_minutes: {self.sync_interval_minutes}
+sync_on_startup: {str(self.sync_on_startup).lower()}
 sync_weeks: {self.sync_weeks}
 max_events_per_club_per_week: {self.max_events_per_club_per_week}  # 0 = unlimited
 max_menu_events: {self.max_menu_events}  # menu display limit (0 = unlimited)
@@ -300,6 +301,13 @@ strava_api_base: "{self.strava_api_base}"  # e.g. http://localhost:51679/api/v3
         else:
             sync_interval_minutes = config.get("sync_interval_minutes", 60)
 
+        # Sync on startup
+        sync_on_startup_env = os.environ.get("SYNC_ON_STARTUP", "")
+        if sync_on_startup_env:
+            sync_on_startup = sync_on_startup_env.lower() in ("true", "1", "yes")
+        else:
+            sync_on_startup = config.get("sync_on_startup", True)
+
         # Flooding prevention
         max_events_per_club_per_week = config.get("max_events_per_club_per_week", 10)
         sync_weeks = config.get("sync_weeks", 8)
@@ -325,6 +333,7 @@ strava_api_base: "{self.strava_api_base}"  # e.g. http://localhost:51679/api/v3
             cities=cities,
             clubs=clubs,
             sync_interval_minutes=sync_interval_minutes,
+            sync_on_startup=sync_on_startup,
             max_events_per_club_per_week=max_events_per_club_per_week,
             sync_weeks=sync_weeks,
             max_menu_events=max_menu_events,

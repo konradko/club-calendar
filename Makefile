@@ -1,4 +1,4 @@
-.PHONY: install test dev dmg icons strava-mock-server pre-commit
+.PHONY: install test dev run dmg icons strava-mock-server pre-commit
 
 # Install dependencies and set up pre-commit hooks
 install:
@@ -52,6 +52,17 @@ dev: icons
 		-- python -m club_calendar.menubar || true
 	@echo "Cleaning up mock server..."
 	@pkill -f "mock_strava_server.py" 2>/dev/null || true
+
+# Run app with hot reload (production API, no sync on start)
+run: icons
+	uv sync
+	@echo "Starting app with production Strava API and hot reload..."
+	SYNC_ON_STARTUP=false \
+	uv run watchmedo auto-restart \
+		--patterns="*.py" \
+		--recursive \
+		--directory=src \
+		-- python -m club_calendar.menubar
 
 # Run mock Strava server standalone
 # Usage: make strava-mock-server [SCENARIO=happy|updated|all-deleted]
