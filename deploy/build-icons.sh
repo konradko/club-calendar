@@ -16,8 +16,13 @@ fi
 
 echo "Generating menubar icons from icon.svg..."
 # Render at 18x18/36x36 and center in 22x22/44x44 canvas for proper padding
-rsvg-convert -w 18 -h 18 icon.svg | magick - -gravity center -background none -extent 22x22 deploy/macos-menubar/icon_menubarTemplate.png
-rsvg-convert -w 36 -h 36 icon.svg | magick - -gravity center -background none -extent 44x44 deploy/macos-menubar/icon_menubarTemplate@2x.png
+# DPI must be 72 for 1x and 144 for 2x for crisp Retina rendering
+rsvg-convert -w 18 -h 18 icon.svg | magick - -gravity center -background none -extent 22x22 deploy/icon_menubarTemplate.png
+rsvg-convert -w 36 -h 36 icon.svg | magick - -gravity center -background none -extent 44x44 deploy/icon_menubarTemplate@2x.png
+
+# Set correct DPI for macOS (72 for 1x, 144 for 2x)
+sips -s dpiWidth 72 -s dpiHeight 72 deploy/icon_menubarTemplate.png
+sips -s dpiWidth 144 -s dpiHeight 144 deploy/icon_menubarTemplate@2x.png
 
 echo "Generated:"
-ls -la deploy/macos-menubar/icon_menubarTemplate*.png
+ls -la deploy/icon_menubarTemplate*.png

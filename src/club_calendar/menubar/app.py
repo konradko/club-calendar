@@ -12,7 +12,13 @@ from threading import Thread
 from urllib.parse import parse_qs, urlparse
 
 try:
-    from AppKit import NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName
+    from AppKit import (
+        NSColor,
+        NSFont,
+        NSFontAttributeName,
+        NSForegroundColorAttributeName,
+        NSImage,
+    )
     from Foundation import NSAttributedString, NSMutableAttributedString
 
     HAS_APPKIT = True
@@ -648,30 +654,69 @@ def create_app(rumps_module=None, controller=None):
             # Look for menu bar icon in common locations
             # Template images (ending in "Template") auto-tint for light/dark mode
             icon_path = None
-            search_paths = [
-                Path(__file__).parents[3] / "deploy" / "icon_menubarTemplate.png",  # Dev
+            icon_path_2x = None
+            search_bases = [
+                Path(__file__).parents[3] / "deploy",  # Dev
             ]
             # PyInstaller bundle: check _MEIPASS (frozen app resources)
             if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-                search_paths.insert(0, Path(sys._MEIPASS) / "icon_menubarTemplate.png")
-            for path in search_paths:
-                if path.exists():
-                    icon_path = str(path)
+                search_bases.insert(0, Path(sys._MEIPASS))
+            for base in search_bases:
+                path_1x = base / "icon_menubarTemplate.png"
+                path_2x = base / "icon_menubarTemplate@2x.png"
+                if path_1x.exists():
+                    icon_path = str(path_1x)
+                    if path_2x.exists():
+                        icon_path_2x = str(path_2x)
                     break
 
             super().__init__(
                 "Club Calendar",
-                icon=icon_path,
+                icon=None,  # We'll set it manually for proper Retina support
                 template=True,
                 title="📅" if not icon_path else None,
                 quit_button=None,  # We add our own Quit button
             )
+
+            # Create multi-resolution NSImage for crisp Retina display
+            if icon_path and HAS_APPKIT:
+                self._set_retina_icon(icon_path, icon_path_2x)
+
             self.controller = controller
             self._update_menu()
 
             # Auto-sync on startup if ready and enabled
             if self.controller.is_ready() and self.controller.settings.sync_on_startup:
                 self._sync_on_startup()
+
+        def _set_retina_icon(self, path_1x: str, path_2x: str | None) -> None:
+            """Set menu bar icon with proper Retina support.
+
+            Creates an NSImage with both 1x and 2x representations so macOS
+            can display the correct resolution for the screen.
+            """
+            # Create NSImage at the correct point size (22x22 points)
+            image = NSImage.alloc().initWithSize_((22, 22))
+
+            # Load 1x representation
+            rep_1x = NSImage.alloc().initByReferencingFile_(path_1x)
+            if rep_1x:
+                for rep in rep_1x.representations():
+                    image.addRepresentation_(rep)
+
+            # Load 2x representation if available
+            if path_2x:
+                rep_2x = NSImage.alloc().initByReferencingFile_(path_2x)
+                if rep_2x:
+                    for rep in rep_2x.representations():
+                        image.addRepresentation_(rep)
+
+            # Enable template mode for automatic light/dark theme adaptation
+            image.setTemplate_(True)
+
+            # Set directly on the status item (bypass rumps' 20x20 scaling)
+            self._icon_nsimage = image
+            self._icon = path_1x
 
         def _sync_on_startup(self) -> None:
             """Run initial sync in background thread."""
