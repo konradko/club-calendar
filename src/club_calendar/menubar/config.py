@@ -80,8 +80,10 @@ class Settings:
     sync_interval_minutes: int = 60  # Default: 1 hour
     sync_on_startup: bool = True  # Sync when app starts
 
-    # Dev: override Strava API base URL (e.g., http://localhost:51679 for mock server)
-    strava_api_base: str = ""
+    # Strava API URLs (override for mock server testing)
+    strava_api_url: str = ""
+    strava_token_url: str = ""
+    strava_auth_url: str = ""
 
     # Calendar settings
     calendar_name: str = "Club Calendar"  # Name of calendar in Apple Calendar
@@ -232,9 +234,6 @@ oauth_callback_port: {self.oauth_callback_port}
 {cities_block}
 
 {clubs_block}
-
-# Dev settings (leave empty for production)
-strava_api_base: "{self.strava_api_base}"  # e.g. http://localhost:51679/api/v3
 """
         get_config_file().write_text(content)
 
@@ -303,8 +302,10 @@ strava_api_base: "{self.strava_api_base}"  # e.g. http://localhost:51679/api/v3
         calendar_name = config.get("calendar_name", "Club Calendar")
         oauth_callback_port = config.get("oauth_callback_port", 51678)
 
-        # Dev settings
-        strava_api_base = config.get("strava_api_base", "")
+        # Strava API URLs (for mock server testing)
+        strava_api_url = config.get("strava_api_url", "")
+        strava_token_url = config.get("strava_token_url", "")
+        strava_auth_url = config.get("strava_auth_url", "")
 
         # Schema version (default to 0 for old unversioned configs)
         schema_version = config.get("schema_version", 0)
@@ -323,7 +324,9 @@ strava_api_base: "{self.strava_api_base}"  # e.g. http://localhost:51679/api/v3
             max_menu_events=max_menu_events,
             calendar_name=calendar_name,
             oauth_callback_port=oauth_callback_port,
-            strava_api_base=strava_api_base,
+            strava_api_url=strava_api_url,
+            strava_token_url=strava_token_url,
+            strava_auth_url=strava_auth_url,
         )
 
         # Auto-upgrade config if schema version is older

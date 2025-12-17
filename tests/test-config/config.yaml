@@ -19,6 +19,7 @@ strava_refresh_token: mock_refresh_token  # auto-set after auth
 
 # Sync settings
 sync_interval_minutes: 0
+sync_on_startup: true
 sync_weeks: 8
 max_events_per_club_per_week: 10  # 0 = unlimited
 max_menu_events: 15  # menu display limit (0 = unlimited)
@@ -36,55 +37,12 @@ oauth_callback_port: 51678
 #     - Manchester
 cities: []
 
-clubs:
-  1175205:
-    name: "Gravelowy Wrocław"
-    city: "Wrocław"
-    enabled: true
-  1221892:
-    name: "NieDamRady"
-    city: "Wrocław"
-    enabled: true
-  231407:
-    name: "The Strava Club"
-    city: "San Francisco"
-    enabled: true
-  110128:
-    name: "DGR"
-    city: "Wrocław"
-    enabled: true
-  1083127:
-    name: "Black Wire Team"
-    city: "Wrocław"
-    enabled: true
-  112787:
-    name: "Wrocław"
-    city: "Wrocław"
-    enabled: true
-  568317:
-    name: "Szosa Bez Napinki"
-    city: "Wrocław"
-    enabled: true
-  776100:
-    name: "Bikestage Wrocław"
-    city: "Wrocław"
-    enabled: true
-  1450979:
-    name: "Coffee Ride Wrocław"
-    city: "Wrocław"
-    enabled: true
-  1146427:
-    name: "CUG"
-    city: "Wrocław"
-    enabled: true
-  1695175:
-    name: "Spinhood"
-    city: "Wrocław"
-    enabled: true
-  1404342:
-    name: "ZRYW"
-    city: "Wrocław"
-    enabled: true
-
-# Dev settings (leave empty for production)
-strava_api_base: ""  # e.g. http://localhost:51679/api/v3
+# Clubs - populated after first sync
+# You can manually enable/disable clubs here
+# Example:
+#   clubs:
+#     123456:
+#       name: Morning Runners
+#       city: London
+#       enabled: true
+clubs: {}

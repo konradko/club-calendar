@@ -273,9 +273,6 @@ def main():
 ║  API URL: {api_url:<52}║
 ║  Mode:    {mode:<52}║
 ╠═══════════════════════════════════════════════════════════════╣
-║  Set in config.yaml:                                           ║
-║    strava_api_base: "{api_url}"            ║
-╠═══════════════════════════════════════════════════════════════╣
 ║  Endpoints:                                                    ║
 ║    GET  /api/v3/athlete              - Get athlete             ║
 ║    GET  /api/v3/athlete/clubs        - Get clubs               ║

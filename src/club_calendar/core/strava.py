@@ -1,7 +1,6 @@
 """Strava API client for fetching club events."""
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -15,10 +14,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_RETRIES = 3
 
-# Strava URLs - can be overridden via env vars for testing
-STRAVA_AUTH_URL = os.environ.get("STRAVA_AUTH_URL", "https://www.strava.com/oauth/authorize")
-STRAVA_TOKEN_URL = os.environ.get("STRAVA_TOKEN_URL", "https://www.strava.com/oauth/token")
-STRAVA_API_URL = os.environ.get("STRAVA_API_URL", "https://www.strava.com/api/v3")
+# Production Strava URLs
+DEFAULT_AUTH_URL = "https://www.strava.com/oauth/authorize"
+DEFAULT_TOKEN_URL = "https://www.strava.com/oauth/token"
+DEFAULT_API_URL = "https://www.strava.com/api/v3"
 
 
 class StravaError(Exception):
@@ -88,7 +87,9 @@ class StravaClient:
         access_token: OAuth access token (optional)
         timeout: Request timeout in seconds (default: 30.0)
         retries: Number of retries for transient failures (default: 3)
-        api_base_url: Override API base URL (for testing with mock server)
+        api_url: Override API URL (for testing with mock server)
+        token_url: Override token URL (for testing with mock server)
+        auth_url: Override auth URL (for testing with mock server)
     """
 
     def __init__(
@@ -99,18 +100,19 @@ class StravaClient:
         access_token: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         retries: int = DEFAULT_RETRIES,
-        api_base_url: str | None = None,
+        api_url: str | None = None,
+        token_url: str | None = None,
+        auth_url: str | None = None,
     ):
         self.client_id = client_id
         self.client_secret = client_secret
         self._refresh_token = refresh_token
         self._access_token = access_token
         self._token_expires_at = 0
-        # Allow override for testing
-        self._api_url = api_base_url.rstrip("/") if api_base_url else STRAVA_API_URL
-        self._token_url = (
-            f"{api_base_url.rstrip('/')}/oauth/token" if api_base_url else STRAVA_TOKEN_URL
-        )
+        # URLs with defaults
+        self._api_url = (api_url.rstrip("/") if api_url else DEFAULT_API_URL).rstrip("/")
+        self._token_url = token_url or DEFAULT_TOKEN_URL
+        self._auth_url = auth_url or DEFAULT_AUTH_URL
         # Use transport with retry for transient network failures
         transport = HTTPTransport(retries=retries)
         self._http = httpx.Client(timeout=timeout, transport=transport)
@@ -134,7 +136,7 @@ class StravaClient:
             "scope": "read",
             "approval_prompt": "auto",
         }
-        return f"{STRAVA_AUTH_URL}?" + "&".join(f"{k}={v}" for k, v in params.items())
+        return f"{self._auth_url}?" + "&".join(f"{k}={v}" for k, v in params.items())
 
     def exchange_code(self, code: str) -> TokenResponse:
         """Exchange authorization code for tokens."""

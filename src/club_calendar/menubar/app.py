@@ -116,7 +116,9 @@ def _create_service(settings: Settings) -> ClubCalendarService:
         client_id=settings.strava_client_id,
         client_secret=settings.strava_client_secret,
         refresh_token=settings.strava_refresh_token,
-        api_base_url=settings.strava_api_base or None,
+        api_url=settings.strava_api_url or None,
+        token_url=settings.strava_token_url or None,
+        auth_url=settings.strava_auth_url or None,
     )
 
 

@@ -38,7 +38,10 @@ def mock_settings(tmp_path):
     mock.max_events_per_club_per_week = 5
     mock.max_menu_events = 15
     mock.sync_interval_minutes = 60
-    mock.strava_api_base = ""
+    mock.strava_api_url = ""
+    mock.strava_token_url = ""
+    mock.strava_auth_url = ""
+    mock.oauth_callback_port = 51678
     return mock
 
 

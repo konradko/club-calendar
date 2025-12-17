@@ -35,16 +35,13 @@ endef
 dev: icons
 	@pkill -f "mock_strava_server.py" 2>/dev/null || true
 	@sleep 0.5
-	$(call create-test-config)
+	MOCK_PORT=$(MOCK_PORT) $(call create-test-config)
 	uv sync
 	@echo "Starting mock Strava server in dynamic mode..."
 	@python tests/mock_strava_server.py --port $(MOCK_PORT) &
 	@sleep 1
 	@echo "Starting app with mock Strava API and hot reload..."
 	CLUB_CALENDAR_CONFIG_DIR=$(TEST_CONFIG_DIR) \
-	STRAVA_API_URL=http://localhost:$(MOCK_PORT)/api/v3 \
-	STRAVA_TOKEN_URL=http://localhost:$(MOCK_PORT)/oauth/token \
-	STRAVA_AUTH_URL=http://localhost:$(MOCK_PORT)/oauth/authorize \
 	uv run watchmedo auto-restart \
 		--patterns="*.py" \
 		--recursive \
