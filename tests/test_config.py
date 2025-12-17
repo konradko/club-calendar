@@ -86,20 +86,6 @@ class TestSettingsClass:
         assert settings.sync_weeks == 4
         assert settings.max_events_per_club_per_week == 3
 
-    def test_settings_load_env_overrides_config(self, mock_config_file, monkeypatch):
-        """Test that environment variables override config file values."""
-        mock_config_file.write_text(
-            yaml.dump({"strava_client_id": "from_config", "cities": ["Portland"]})
-        )
-
-        monkeypatch.setenv("STRAVA_CLIENT_ID", "from_env")
-        monkeypatch.setenv("CLUB_CITIES", "Seattle, Denver")
-
-        settings = Settings.load()
-
-        assert settings.strava_client_id == "from_env"
-        assert settings.cities == ["Seattle", "Denver"]
-
     def test_settings_save_and_load(self, mock_config_file):
         """Test saving and loading settings preserves values."""
         settings = Settings(
@@ -137,15 +123,6 @@ class TestSettingsClass:
         assert settings.strava_client_id == ""
         assert settings.clubs == {}
         assert settings.sync_interval_minutes == 60
-
-    def test_settings_sync_interval_env_var(self, mock_config_file, monkeypatch):
-        """Test SYNC_INTERVAL_MINUTES env var overrides config."""
-        mock_config_file.write_text("sync_interval_minutes: 30")
-        monkeypatch.setenv("SYNC_INTERVAL_MINUTES", "120")
-
-        settings = Settings.load()
-
-        assert settings.sync_interval_minutes == 120
 
     def test_get_settings_function(self):
         """Test get_settings convenience function."""

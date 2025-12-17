@@ -53,11 +53,11 @@ dev: icons
 	@echo "Cleaning up mock server..."
 	@pkill -f "mock_strava_server.py" 2>/dev/null || true
 
-# Run app with hot reload (production API, no sync on start)
+# Run app with hot reload (production API)
+# Note: Set sync_on_startup: false in config.yaml to skip initial sync
 run: icons
 	uv sync
 	@echo "Starting app with production Strava API and hot reload..."
-	SYNC_ON_STARTUP=false \
 	uv run watchmedo auto-restart \
 		--patterns="*.py" \
 		--recursive \

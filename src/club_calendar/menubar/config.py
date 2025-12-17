@@ -268,21 +268,13 @@ strava_api_base: "{self.strava_api_base}"  # e.g. http://localhost:51679/api/v3
                     config_file.write_text(new_content)
                     config = {}
 
-        # Get values: env vars > config file
-        strava_client_id = os.environ.get("STRAVA_CLIENT_ID") or config.get("strava_client_id", "")
-        strava_client_secret = os.environ.get("STRAVA_CLIENT_SECRET") or config.get(
-            "strava_client_secret", ""
-        )
-        strava_refresh_token = os.environ.get("STRAVA_REFRESH_TOKEN") or config.get(
-            "strava_refresh_token", ""
-        )
+        # Get values from config file
+        strava_client_id = config.get("strava_client_id", "")
+        strava_client_secret = config.get("strava_client_secret", "")
+        strava_refresh_token = config.get("strava_refresh_token", "")
 
         # Cities filter (list)
-        cities_env = os.environ.get("CLUB_CITIES", "")
-        if cities_env:
-            cities = [c.strip() for c in cities_env.split(",") if c.strip()]
-        else:
-            cities = config.get("cities", [])
+        cities = config.get("cities", [])
 
         # Clubs dict - convert integer keys to strings (YAML parses unquoted numbers as int)
         raw_clubs = config.get("clubs", {})
@@ -295,18 +287,10 @@ strava_api_base: "{self.strava_api_base}"  # e.g. http://localhost:51679/api/v3
                 clubs[str(club_id)] = ClubInfo(name=f"Club {club_id}", city=None, enabled=True)
 
         # Sync interval
-        sync_interval_env = os.environ.get("SYNC_INTERVAL_MINUTES", "")
-        if sync_interval_env:
-            sync_interval_minutes = int(sync_interval_env)
-        else:
-            sync_interval_minutes = config.get("sync_interval_minutes", 60)
+        sync_interval_minutes = config.get("sync_interval_minutes", 60)
 
         # Sync on startup
-        sync_on_startup_env = os.environ.get("SYNC_ON_STARTUP", "")
-        if sync_on_startup_env:
-            sync_on_startup = sync_on_startup_env.lower() in ("true", "1", "yes")
-        else:
-            sync_on_startup = config.get("sync_on_startup", True)
+        sync_on_startup = config.get("sync_on_startup", True)
 
         # Flooding prevention
         max_events_per_club_per_week = config.get("max_events_per_club_per_week", 10)
@@ -319,8 +303,8 @@ strava_api_base: "{self.strava_api_base}"  # e.g. http://localhost:51679/api/v3
         calendar_name = config.get("calendar_name", "Club Calendar")
         oauth_callback_port = config.get("oauth_callback_port", 51678)
 
-        # Dev settings (env var takes precedence)
-        strava_api_base = os.environ.get("STRAVA_API_BASE") or config.get("strava_api_base", "")
+        # Dev settings
+        strava_api_base = config.get("strava_api_base", "")
 
         # Schema version (default to 0 for old unversioned configs)
         schema_version = config.get("schema_version", 0)
