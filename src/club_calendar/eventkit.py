@@ -5,7 +5,7 @@ from datetime import timedelta
 
 from club_calendar_core.strava import ClubEvent
 
-from club_calendar_macos.models import SyncResult
+from club_calendar.models import SyncResult
 
 logger = logging.getLogger(__name__)
 

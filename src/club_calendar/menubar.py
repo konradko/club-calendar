@@ -21,15 +21,15 @@ except ImportError:
 
 from club_calendar_core.service import ClubCalendarService, OAuthResult
 
-from club_calendar_macos.config import (
+from club_calendar.config import (
     Settings,
     get_config_file,
     get_logs_dir,
     get_settings,
     get_token_store,
 )
-from club_calendar_macos.eventkit import sync_events_to_calendar
-from club_calendar_macos.models import CommandResult, SetupResult, SyncResult
+from club_calendar.eventkit import sync_events_to_calendar
+from club_calendar.models import CommandResult, SetupResult, SyncResult
 
 # Set up logging
 LOG_FILE = get_logs_dir() / "club-calendar.log"
@@ -169,7 +169,7 @@ class MenuBarController:
         Returns:
             Tuple of (success, message)
         """
-        from club_calendar_macos.eventkit import request_calendar_access
+        from club_calendar.eventkit import request_calendar_access
 
         try:
             granted, error = request_calendar_access()
@@ -454,7 +454,7 @@ class MenuBarController:
             return str(entry_point)
 
         # Fallback: use python -m
-        return f"{executable} -m club_calendar_macos.menubar"
+        return f"{executable} -m club_calendar.menubar"
 
     def is_login_enabled(self) -> bool:
         """Check if app is configured to start at login."""

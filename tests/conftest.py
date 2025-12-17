@@ -1,12 +1,60 @@
-"""Shared test fixtures for core package."""
+"""Shared test fixtures for Club Calendar."""
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-# Sample API responses (duplicated across packages due to per-package pytest roots)
+# =============================================================================
+# macOS-specific fixtures (autouse for test isolation)
+# =============================================================================
+
+
+@pytest.fixture(autouse=True)
+def mock_token_store():
+    """Mock token store to return test refresh token."""
+    mock_store = MagicMock()
+    mock_store.get_refresh_token.return_value = "test_refresh_token"
+    mock_store.get_access_token.return_value = None
+
+    with patch("club_calendar.menubar.get_token_store", return_value=mock_store):
+        yield mock_store
+
+
+@pytest.fixture(autouse=True)
+def mock_config_file(tmp_path: Path):
+    """Mock config/logs paths for all tests to ensure isolation."""
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(exist_ok=True)
+    config_file = config_dir / "config.yaml"
+
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(exist_ok=True)
+
+    with (
+        patch("club_calendar.config.get_config_file", return_value=config_file),
+        patch("club_calendar.config.get_config_dir", return_value=config_dir),
+        patch("club_calendar.config.get_logs_dir", return_value=logs_dir),
+    ):
+        yield config_file
+
+
+@pytest.fixture(autouse=True)
+def mock_external_calls():
+    """Mock webbrowser and subprocess to prevent real external calls."""
+    with (
+        patch("webbrowser.open") as mock_browser,
+        patch("subprocess.run") as mock_subprocess,
+    ):
+        mock_subprocess.return_value = MagicMock(returncode=0, stderr="")
+        yield {"webbrowser": mock_browser, "subprocess": mock_subprocess}
+
+
+# =============================================================================
+# Strava API mock data
+# =============================================================================
 CLUBS_RESPONSE = [
     {
         "id": 123,

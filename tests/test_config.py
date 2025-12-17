@@ -4,7 +4,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import yaml
-from club_calendar_macos.config import (
+
+from club_calendar.config import (
     ConfigTokenStore,
     Settings,
     get_config_dir,
@@ -22,7 +23,7 @@ class TestConfigFunctions:
         fake_home = tmp_path / "home"
         fake_home.mkdir()
 
-        with patch("club_calendar_macos.config.Path.home", return_value=fake_home):
+        with patch("club_calendar.config.Path.home", return_value=fake_home):
             result = get_config_dir()
 
         expected = fake_home / "Library" / "Application Support" / "Club Calendar"
@@ -44,7 +45,7 @@ class TestConfigFunctions:
         fake_home = tmp_path / "home"
         fake_home.mkdir()
 
-        with patch("club_calendar_macos.config.Path.home", return_value=fake_home):
+        with patch("club_calendar.config.Path.home", return_value=fake_home):
             result = get_logs_dir()
 
         expected = fake_home / "Library" / "Logs" / "Club Calendar"
@@ -310,7 +311,7 @@ class TestSettingsClass:
 
     def test_settings_schema_version_upgrade(self, mock_config_file):
         """Test that old config without schema_version gets upgraded."""
-        from club_calendar_macos.config import CURRENT_SCHEMA_VERSION
+        from club_calendar.config import CURRENT_SCHEMA_VERSION
 
         # Write old-style config without schema_version
         old_config = {
@@ -337,7 +338,7 @@ class TestSettingsClass:
 
     def test_settings_schema_version_current_no_upgrade(self, mock_config_file):
         """Test that current schema version doesn't trigger upgrade."""
-        from club_calendar_macos.config import CURRENT_SCHEMA_VERSION
+        from club_calendar.config import CURRENT_SCHEMA_VERSION
 
         # Create settings with current version
         settings = Settings(

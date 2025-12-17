@@ -32,7 +32,7 @@ jobs:
         run: uv python install 3.13
 
       - name: Install dependencies
-        run: uv sync --all-packages
+        run: uv sync
 
       - name: Run ruff check
         run: uv run ruff check .
@@ -43,9 +43,6 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        package: [core, cli, macos]
     steps:
       - uses: actions/checkout@v4
 
@@ -56,14 +53,13 @@ jobs:
         run: uv python install 3.13
 
       - name: Install dependencies
-        run: uv sync --all-packages
+        run: uv sync
 
       - name: Run tests
-        env:
-          PACKAGE: ${{ matrix.package }}
         run: |
-          uv run pytest "packages/${PACKAGE}/tests/" \
-            --cov="club_calendar_${PACKAGE}" \
+          uv run pytest tests/ \
+            --cov=club_calendar_core \
+            --cov=club_calendar \
             --cov-report=term-missing \
             --cov-fail-under=90
 
@@ -80,7 +76,7 @@ jobs:
         run: uv python install 3.13
 
       - name: Install dependencies
-        run: uv sync --all-packages
+        run: uv sync
 
       - name: Install pre-commit
         run: uv pip install pre-commit

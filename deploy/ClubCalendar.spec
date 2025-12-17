@@ -5,9 +5,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-# Get project root (deploy/macos-dmg -> project root)
+# Get project root (deploy -> project root)
 spec_dir = Path(SPECPATH)
-project_root = spec_dir.parent.parent
+project_root = spec_dir.parent
 source_icon = project_root / "icon.png"
 
 block_cipher = None
@@ -77,22 +77,24 @@ print("Generating icons from icon.png...")
 datas = generate_icons()
 
 a = Analysis(
-    [str(project_root / "packages" / "macos" / "src" / "club_calendar_macos" / "menubar.py")],
-    pathex=[str(project_root / "packages" / "macos" / "src")],
+    [str(project_root / "src" / "club_calendar" / "menubar.py")],
+    pathex=[
+        str(project_root / "src"),
+        str(project_root / "packages" / "core" / "src"),
+    ],
     binaries=[],
     datas=datas,
     hiddenimports=[
         "rumps",
-        "club_calendar_macos",
-        "club_calendar_macos.config",
-        "club_calendar_macos.models",
+        "club_calendar",
+        "club_calendar.config",
+        "club_calendar.models",
+        "club_calendar.eventkit",
         "club_calendar_core",
         "club_calendar_core.strava",
-        "club_calendar_core.calendar",
         "club_calendar_core.service",
-        "club_calendar_cli",
+        "club_calendar_core.ports",
         "httpx",
-        "icalendar",
         "yaml",
     ],
     hookspath=[],
