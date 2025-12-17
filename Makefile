@@ -32,7 +32,7 @@ define create-test-config
 	@python tests/create_test_config.py
 endef
 # Run app with mock Strava server for e2e testing
-dev:
+dev: icons
 	@pkill -f "mock_strava_server.py" 2>/dev/null || true
 	@sleep 0.5
 	$(call create-test-config)
