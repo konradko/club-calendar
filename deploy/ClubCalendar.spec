@@ -77,7 +77,7 @@ print("Generating icons from icon.png...")
 datas = generate_icons()
 
 a = Analysis(
-    [str(project_root / "src" / "club_calendar" / "menubar.py")],
+    [str(project_root / "src" / "club_calendar" / "menubar" / "__main__.py")],
     pathex=[
         str(project_root / "src"),
         str(project_root / "packages" / "core" / "src"),
