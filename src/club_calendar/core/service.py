@@ -33,7 +33,7 @@ def _truncate_error(message: str, max_length: int = MAX_ERROR_MESSAGE_LENGTH) ->
     return message[: max_length - 3] + "..."
 
 
-@dataclass
+@dataclass(frozen=True)
 class OAuthResult:
     """Result of OAuth flow."""
 

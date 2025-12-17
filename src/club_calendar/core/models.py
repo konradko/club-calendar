@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 
 
-@dataclass
+@dataclass(frozen=True)
 class SyncResult:
     """Result of a sync operation."""
 
@@ -13,7 +13,7 @@ class SyncResult:
     events_removed: int = 0
 
 
-@dataclass
+@dataclass(frozen=True)
 class SetupResult:
     """Result of a setup operation."""
 

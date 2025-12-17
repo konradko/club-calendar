@@ -51,10 +51,11 @@ LOG_FILE = get_logs_dir() / "club-calendar.log"
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
-# File handler (always)
+# File handler - WARNING in production for performance, INFO in dev for debugging
+_log_level = logging.INFO if ".app/Contents/MacOS" not in sys.executable else logging.WARNING
 logging.basicConfig(
     filename=str(LOG_FILE),
-    level=logging.INFO,
+    level=_log_level,
     format=LOG_FORMAT,
     datefmt=LOG_DATEFMT,
 )

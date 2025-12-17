@@ -32,7 +32,7 @@ class StravaRateLimitError(StravaError):
     """Rate limit exceeded."""
 
 
-@dataclass
+@dataclass(frozen=True)
 class TokenResponse:
     """OAuth token response from Strava."""
 
@@ -41,7 +41,7 @@ class TokenResponse:
     expires_at: int
 
 
-@dataclass
+@dataclass(frozen=True)
 class Club:
     """Strava club info."""
 
@@ -53,7 +53,7 @@ class Club:
     country: str | None
 
 
-@dataclass
+@dataclass(frozen=True)
 class ClubEvent:
     """Strava club event.
 
