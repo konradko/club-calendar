@@ -79,12 +79,8 @@ clubs:
 # Install dependencies
 make install
 
-# Run with hot reload
+# Run with hot reload and mock Strava server
 make dev
-
-# Run with mock Strava server
-make dev-mock
-
 # Run tests
 make test
 

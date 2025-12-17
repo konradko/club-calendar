@@ -1,4 +1,4 @@
-.PHONY: install test dev dev-mock dmg icons mock-strava pre-commit
+.PHONY: install test dev dmg icons strava-mock-server pre-commit
 
 # Install dependencies and set up pre-commit hooks
 install:
@@ -22,15 +22,6 @@ icons:
 dmg:
 	./deploy/build-dmg.sh
 
-# Run app with hot reload (auto-restart on file changes)
-dev:
-	uv sync
-	uv run watchmedo auto-restart \
-		--patterns="*.py" \
-		--recursive \
-		--directory=src \
-		-- python -m club_calendar.menubar
-
 # Mock server configuration
 MOCK_PORT ?= 51679
 SCENARIOS_DIR = tests/scenarios
@@ -40,9 +31,8 @@ TEST_CONFIG_DIR = $(shell pwd)/tests/test-config
 define create-test-config
 	@python tests/create_test_config.py
 endef
-
 # Run app with mock Strava server for e2e testing
-dev-mock:
+dev:
 	@pkill -f "mock_strava_server.py" 2>/dev/null || true
 	@sleep 0.5
 	$(call create-test-config)
@@ -64,8 +54,8 @@ dev-mock:
 	@pkill -f "mock_strava_server.py" 2>/dev/null || true
 
 # Run mock Strava server standalone
-# Usage: make mock-strava [SCENARIO=happy|updated|all-deleted]
-mock-strava:
+# Usage: make strava-mock-server [SCENARIO=happy|updated|all-deleted]
+strava-mock-server:
 	@pkill -f "mock_strava_server.py" 2>/dev/null || true
 	@sleep 0.5
 ifdef SCENARIO

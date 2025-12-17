@@ -1,0 +1,90 @@
+# Club Calendar Configuration
+#
+# schema_version: do not edit manually
+#
+# Setup:
+#   1. Go to https://www.strava.com/settings/api
+#   2. Create an app (any name, localhost callback URL)
+#   3. Copy Client ID and Client Secret below
+#   4. Save this file and click "Authenticate..." in the menu
+#
+# After authentication, click "Sync Now" to fetch your clubs.
+# New clubs matching your cities filter are auto-enabled.
+
+schema_version: 2
+
+strava_client_id: mock_client_id
+strava_client_secret: mock_client_secret
+strava_refresh_token: mock_refresh_token  # auto-set after auth
+
+# Sync settings
+sync_interval_minutes: 0
+sync_weeks: 8
+max_events_per_club_per_week: 10  # 0 = unlimited
+max_menu_events: 15  # menu display limit (0 = unlimited)
+
+# Calendar settings
+calendar_name: "Test Club Calendar"
+
+# OAuth callback port (49152-65535 range recommended)
+oauth_callback_port: 51678
+
+# City filter - auto-enable new clubs in these cities (empty = all)
+# Example:
+#   cities:
+#     - London
+#     - Manchester
+cities: []
+
+clubs:
+  1175205:
+    name: "Gravelowy Wrocław"
+    city: "Wrocław"
+    enabled: true
+  1221892:
+    name: "NieDamRady"
+    city: "Wrocław"
+    enabled: true
+  231407:
+    name: "The Strava Club"
+    city: "San Francisco"
+    enabled: true
+  110128:
+    name: "DGR"
+    city: "Wrocław"
+    enabled: true
+  1083127:
+    name: "Black Wire Team"
+    city: "Wrocław"
+    enabled: true
+  112787:
+    name: "Wrocław"
+    city: "Wrocław"
+    enabled: true
+  568317:
+    name: "Szosa Bez Napinki"
+    city: "Wrocław"
+    enabled: true
+  776100:
+    name: "Bikestage Wrocław"
+    city: "Wrocław"
+    enabled: true
+  1450979:
+    name: "Coffee Ride Wrocław"
+    city: "Wrocław"
+    enabled: true
+  1146427:
+    name: "CUG"
+    city: "Wrocław"
+    enabled: true
+  1695175:
+    name: "Spinhood"
+    city: "Wrocław"
+    enabled: true
+  1404342:
+    name: "ZRYW"
+    city: "Wrocław"
+    enabled: true
+
+# Dev settings (leave empty for production)
+strava_api_base: ""  # e.g. http://localhost:51679/api/v3
