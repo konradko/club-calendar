@@ -297,7 +297,7 @@ class StravaClient:
         def fetch_club(club_id: int) -> tuple[int, list[ClubEvent] | Exception]:
             try:
                 return (club_id, self.get_club_events(club_id))
-            except Exception as e:
+            except (StravaError, httpx.HTTPError, httpx.TimeoutException) as e:
                 return (club_id, e)
 
         # Use thread pool for concurrent fetching (httpx.Client is thread-safe)

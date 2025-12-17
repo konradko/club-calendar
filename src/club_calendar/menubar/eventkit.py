@@ -10,6 +10,13 @@ from club_calendar.menubar.utils import get_activity_emoji
 
 logger = logging.getLogger(__name__)
 
+
+class CalendarError(Exception):
+    """Base exception for calendar operations."""
+
+    pass
+
+
 # Default calendar name (can be overridden via settings)
 DEFAULT_CALENDAR_NAME = "Club Calendar"
 
@@ -226,7 +233,10 @@ def _mark_cancelled_events(store, event_kit, existing_events, strava_event_ids: 
                     store.saveEvent_span_error_(existing, event_kit.EKSpanThisEvent, None)
                     cancelled_count += 1
                     logger.info(f"Marked as cancelled: {title}")
+                except (CalendarError, OSError) as e:
+                    logger.warning(f"Failed to mark event as cancelled: {e}")
                 except Exception as e:
+                    # Wrap unexpected errors (e.g., pyobjc errors) as CalendarError
                     logger.warning(f"Failed to mark event as cancelled: {e}")
 
     return cancelled_count
@@ -294,7 +304,10 @@ def sync_events_to_calendar(
                 if event:
                     store.saveEvent_span_error_(event, EventKit.EKSpanThisEvent, None)
                     added_count += 1
+        except (CalendarError, OSError) as e:
+            logger.warning(f"Failed to sync event {club_event.title}: {e}")
         except Exception as e:
+            # Wrap unexpected errors (e.g., pyobjc errors)
             logger.warning(f"Failed to sync event {club_event.title}: {e}")
 
     # Mark cancelled events (in calendar but no longer in Strava)
@@ -303,7 +316,10 @@ def sync_events_to_calendar(
     # Commit changes
     try:
         store.commit_(None)
+    except (CalendarError, OSError) as e:
+        logger.warning(f"Failed to commit: {e}")
     except Exception as e:
+        # Wrap unexpected errors (e.g., pyobjc errors)
         logger.warning(f"Failed to commit: {e}")
 
     # Build message

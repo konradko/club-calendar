@@ -4,12 +4,16 @@ import logging
 import plistlib
 import subprocess
 import sys
+import traceback
 import webbrowser
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Thread
 from urllib.parse import parse_qs, urlparse
+
+import httpx
+import yaml
 
 try:
     from AppKit import (
@@ -27,8 +31,9 @@ except ImportError:
 
 from club_calendar.core.models import SetupResult, SyncResult
 from club_calendar.core.service import ClubCalendarService, OAuthResult
+from club_calendar.core.strava import StravaError
 from club_calendar.menubar.config import Settings, get_config_file, get_logs_dir, get_settings
-from club_calendar.menubar.eventkit import sync_events_to_calendar
+from club_calendar.menubar.eventkit import CalendarError, sync_events_to_calendar
 from club_calendar.menubar.utils import (
     DayLabel,
     get_activity_emoji,
@@ -56,6 +61,53 @@ if ".app/Contents/MacOS" not in sys.executable:
     console.setLevel(logging.INFO)
     console.setFormatter(logging.Formatter(LOG_FORMAT, LOG_DATEFMT))
     logging.getLogger().addHandler(console)
+
+
+def is_dev_mode() -> bool:
+    """Check if running in development mode (not from .app bundle)."""
+    return ".app/Contents/MacOS" not in sys.executable
+
+
+def is_running_tests() -> bool:
+    """Check if running under pytest."""
+    return "pytest" in sys.modules
+
+
+def show_dev_error(title: str, error: Exception, context: str = "") -> None:
+    """Show detailed error dialog in dev mode with stack trace.
+
+    In dev mode, shows a blocking alert with full error details.
+    In production or during tests, does nothing (errors go through normal flow).
+
+    Args:
+        title: Error dialog title
+        error: The exception that occurred
+        context: Additional context about what was being attempted
+    """
+    if not is_dev_mode() or is_running_tests():
+        return
+
+    error_type = type(error).__name__
+    error_msg = str(error)
+    stack = traceback.format_exc()
+
+    full_message = (
+        f"Type: {error_type}\nMessage: {error_msg}\n\nContext: {context}\n\nStack:\n{stack}"
+    )
+    logger.error(f"DEV ERROR [{context}]: {error_type}: {error_msg}\n{stack}")
+
+    # Show blocking alert dialog
+    try:
+        import rumps
+
+        rumps.alert(title=f"Error: {title}", message=full_message[:2000])
+    except (ImportError, RuntimeError):
+        # Fallback: print to console
+        print(f"\n{'=' * 60}")
+        print(f"DEV ERROR: {title}")
+        print(f"{'=' * 60}")
+        print(full_message)
+        print(f"{'=' * 60}\n")
 
 
 def _create_service(settings: Settings) -> ClubCalendarService:
@@ -154,9 +206,10 @@ class MenuBarController:
             # Try to fetch clubs as a test - this validates token and API access
             clubs = self.service.get_clubs()
             return True, f"Connected ({len(clubs)} clubs)"
-        except Exception as e:
+        except (StravaError, httpx.HTTPError, httpx.TimeoutException) as e:
             error_msg = str(e)[:100]
             logger.error(f"Strava validation failed: {error_msg}")
+            show_dev_error("Strava Validation", e, "Validating API access")
             return False, f"Strava error: {error_msg}"
 
     def validate_calendar_access(self) -> tuple[bool, str]:
@@ -173,9 +226,16 @@ class MenuBarController:
                 return True, "Calendar access granted"
             else:
                 return False, error or "Calendar access denied"
-        except Exception as e:
+        except (CalendarError, OSError) as e:
             error_msg = str(e)[:100]
             logger.error(f"Calendar validation failed: {error_msg}")
+            show_dev_error("Calendar Access", e, "Requesting calendar access")
+            return False, f"Calendar error: {error_msg}"
+        except Exception as e:
+            # Catch any unexpected errors (e.g., pyobjc errors)
+            error_msg = str(e)[:100]
+            logger.error(f"Calendar validation failed (unexpected): {error_msg}")
+            show_dev_error("Calendar Access", e, "Requesting calendar access")
             return False, f"Calendar error: {error_msg}"
 
     def validate_all(self) -> list[tuple[str, bool, str]]:
@@ -259,8 +319,9 @@ class MenuBarController:
             else:
                 logger.error(f"Sync failed: {result.message}")
                 return SyncResult(success=False, message=result.message)
-        except Exception as e:
+        except (StravaError, httpx.HTTPError, CalendarError, OSError, ValueError) as e:
             logger.error(f"Sync error: {e}")
+            show_dev_error("Sync Failed", e, "Running calendar sync")
             return SyncResult(success=False, message=str(e)[:100])
 
     def _filter_events(self, events: list) -> list:
@@ -379,7 +440,8 @@ class MenuBarController:
             self.settings.save()
             self._refresh_service()
             return SetupResult(success=True, message="Credentials saved")
-        except Exception as e:
+        except (OSError, yaml.YAMLError, PermissionError) as e:
+            show_dev_error("Save Credentials", e, "Saving Strava credentials")
             return SetupResult(success=False, message=str(e)[:100])
 
     def start_oauth_flow(self) -> SetupResult:
@@ -409,7 +471,8 @@ class MenuBarController:
             self.settings.save()
             self._refresh_service()
             return SetupResult(success=True, message="Authentication complete")
-        except Exception as e:
+        except (OSError, yaml.YAMLError, PermissionError) as e:
+            show_dev_error("Save Token", e, "Saving refresh token")
             return SetupResult(success=False, message=str(e)[:100])
 
     # Login item management
@@ -488,7 +551,8 @@ class MenuBarController:
                 check=True,
             )
             return SetupResult(success=True, message="Will start at login")
-        except Exception as e:
+        except (OSError, plistlib.InvalidFileException, subprocess.SubprocessError) as e:
+            show_dev_error("Enable Login", e, "Setting up launch agent")
             return SetupResult(success=False, message=str(e)[:100])
 
     def disable_login(self) -> SetupResult:
@@ -503,7 +567,8 @@ class MenuBarController:
                 )
                 plist_path.unlink()
             return SetupResult(success=True, message="Removed from login items")
-        except Exception as e:
+        except (OSError, subprocess.SubprocessError) as e:
+            show_dev_error("Disable Login", e, "Removing launch agent")
             return SetupResult(success=False, message=str(e)[:100])
 
     def set_sync_interval(self, minutes: int) -> SetupResult:
@@ -512,7 +577,8 @@ class MenuBarController:
             self.settings.sync_interval_minutes = minutes
             self.settings.save()
             return SetupResult(success=True, message=f"Sync interval: {minutes} min")
-        except Exception as e:
+        except (OSError, yaml.YAMLError, PermissionError) as e:
+            show_dev_error("Set Interval", e, "Saving sync interval")
             return SetupResult(success=False, message=str(e)[:100])
 
     def get_sync_interval(self) -> int:

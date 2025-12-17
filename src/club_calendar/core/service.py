@@ -1,11 +1,14 @@
 """Core service for Club Calendar - encapsulates all business logic."""
 
+import json
 import logging
 from collections import Counter
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from urllib.parse import parse_qs, urlparse
+
+import httpx
 
 from club_calendar.core.strava import Club, ClubEvent, StravaClient, StravaError, TokenResponse
 
@@ -151,8 +154,12 @@ class ClubCalendarService:
         except StravaError as e:
             logger.error(f"OAuth exchange failed: {e}")
             return OAuthResult(success=False, message=str(e))
-        except Exception as e:
+        except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
             logger.error(f"OAuth exchange error: {e}")
+            return OAuthResult(success=False, message=str(e)[:100])
+        except Exception as e:
+            # Catch any unexpected errors
+            logger.error(f"OAuth exchange error (unexpected): {e}")
             return OAuthResult(success=False, message=str(e)[:100])
         finally:
             client.close()
