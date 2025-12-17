@@ -9,7 +9,7 @@ import webbrowser
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from threading import Thread
+from threading import Lock, Thread
 from urllib.parse import parse_qs, urlparse
 
 import httpx
@@ -31,7 +31,12 @@ except ImportError:
 
 from club_calendar.core.models import SetupResult, SyncResult
 from club_calendar.core.service import ClubCalendarService, OAuthResult
-from club_calendar.core.strava import StravaError
+from club_calendar.core.strava import (
+    ClubEvent,
+    StravaAuthError,
+    StravaError,
+    StravaRateLimitError,
+)
 from club_calendar.menubar.config import Settings, get_config_file, get_logs_dir, get_settings
 from club_calendar.menubar.eventkit import CalendarError, sync_events_to_calendar
 from club_calendar.menubar.utils import (
@@ -110,6 +115,35 @@ def show_dev_error(title: str, error: Exception, context: str = "") -> None:
         print(f"{'=' * 60}\n")
 
 
+def _categorize_error(error: Exception) -> str:
+    """Categorize an error into a user-friendly message.
+
+    Args:
+        error: The exception to categorize
+
+    Returns:
+        User-friendly error message
+    """
+    if isinstance(error, StravaAuthError):
+        return "Authentication failed. Please re-authenticate with Strava."
+    if isinstance(error, StravaRateLimitError):
+        return "Rate limited by Strava. Please try again in 15 minutes."
+    if isinstance(error, StravaError):
+        return f"Strava API error: {str(error)[:80]}"
+    if isinstance(error, CalendarError):
+        return f"Calendar error: {str(error)[:80]}"
+    if isinstance(error, httpx.TimeoutException):
+        return "Network timeout. Check your internet connection."
+    if isinstance(error, httpx.HTTPError):
+        return f"Network error: {str(error)[:80]}"
+    if isinstance(error, OSError):
+        return f"File system error: {str(error)[:80]}"
+    if isinstance(error, ValueError):
+        return f"Configuration error: {str(error)[:80]}"
+    # Fallback for unknown errors
+    return f"Unexpected error: {str(error)[:80]}"
+
+
 def _create_service(settings: Settings) -> ClubCalendarService:
     """Create service from settings."""
     return ClubCalendarService(
@@ -125,7 +159,8 @@ def _create_service(settings: Settings) -> ClubCalendarService:
 class MenuBarController:
     """Business logic for menu bar app (testable without rumps).
 
-    Uses ClubCalendarService for core operations.
+    Uses ClubCalendarService for core operations. Thread-safe access to
+    shared state (last_sync, last_events) is protected by a lock.
     """
 
     def __init__(
@@ -133,8 +168,33 @@ class MenuBarController:
     ):
         self.settings = settings or get_settings()
         self._service = service
-        self.last_sync: datetime | None = None
-        self.last_events: list = []  # Store last synced events for menu display
+        self._lock = Lock()
+        self._last_sync: datetime | None = None
+        self._last_events: list[ClubEvent] = []
+
+    @property
+    def last_sync(self) -> datetime | None:
+        """Get last sync time (thread-safe)."""
+        with self._lock:
+            return self._last_sync
+
+    @last_sync.setter
+    def last_sync(self, value: datetime | None) -> None:
+        """Set last sync time (thread-safe)."""
+        with self._lock:
+            self._last_sync = value
+
+    @property
+    def last_events(self) -> list[ClubEvent]:
+        """Get last synced events (thread-safe)."""
+        with self._lock:
+            return self._last_events.copy()  # Return copy to prevent mutation
+
+    @last_events.setter
+    def last_events(self, value: list[ClubEvent]) -> None:
+        """Set last synced events (thread-safe)."""
+        with self._lock:
+            self._last_events = value
 
     @property
     def service(self) -> ClubCalendarService:
@@ -258,39 +318,97 @@ class MenuBarController:
 
         return results
 
+    def _sync_clubs(self) -> None:
+        """Fetch clubs from Strava and merge with config.
+
+        Raises:
+            StravaError: On API errors
+        """
+        clubs = self.service.get_clubs()
+        logger.info(f"Fetched {len(clubs)} clubs from Strava")
+
+        new_clubs = self.settings.merge_clubs(
+            [{"id": c.id, "name": c.name, "city": c.city} for c in clubs]
+        )
+        if new_clubs > 0:
+            logger.info(f"Added {new_clubs} new clubs to config")
+
+        self.settings.save()
+
+    def _sync_events(
+        self, club_ids: list[int]
+    ) -> tuple[list[ClubEvent], list[tuple[int, Exception]]]:
+        """Fetch and filter events from enabled clubs.
+
+        Args:
+            club_ids: List of club IDs to fetch events from
+
+        Returns:
+            Tuple of (filtered_events, fetch_errors)
+
+        Raises:
+            StravaAuthError: On authentication errors
+        """
+        events, fetch_errors = self.service.get_club_events(club_ids)
+        if fetch_errors:
+            failed_clubs = len(fetch_errors)
+            logger.warning(
+                f"Failed to fetch events from {failed_clubs} club(s): "
+                f"{[(cid, str(e)[:50]) for cid, e in fetch_errors]}"
+            )
+        logger.info(f"Fetched {len(events)} events from {len(club_ids)} enabled clubs")
+
+        # Apply flooding prevention filters and sort
+        events = self._filter_events(events)
+        return events, fetch_errors
+
+    def _sync_to_calendar(
+        self, events: list[ClubEvent], fetch_errors: list[tuple[int, Exception]]
+    ) -> SyncResult:
+        """Sync events to Apple Calendar and build result message.
+
+        Args:
+            events: Events to sync
+            fetch_errors: Any errors from fetching clubs
+
+        Returns:
+            SyncResult with success status and message
+        """
+        result = sync_events_to_calendar(events, self.settings.calendar_name)
+
+        if result.success:
+            self.last_sync = datetime.now()
+            logger.info(f"Sync completed: {result.events_added} events")
+
+            message = self._build_sync_message(events, result.events_added)
+            if fetch_errors:
+                message = f"{message} ({len(fetch_errors)} club(s) failed)"
+            return SyncResult(success=True, message=message)
+        else:
+            logger.error(f"Sync failed: {result.message}")
+            return SyncResult(success=False, message=result.message)
+
     def run_sync(self) -> SyncResult:
         """Run the sync operation - fetches clubs, events, and syncs to Apple Calendar.
 
         Flow:
         1. Reload settings from disk (pick up external edits)
-        2. Fetch all user's clubs from Strava
-        3. Merge with existing config (preserving enabled state)
-        4. Save updated config
-        5. Get enabled club IDs
-        6. Fetch events from enabled clubs
-        7. Apply flooding prevention filters
-        8. Sync to Apple Calendar
+        2. Fetch and merge clubs from Strava
+        3. Fetch events from enabled clubs
+        4. Sync to Apple Calendar
+
+        Returns:
+            SyncResult with success status and message
         """
         logger.info("Starting sync...")
         try:
-            # Step 1: Reload settings from disk
+            # Reload settings to pick up external edits
             self.reload_settings()
 
-            # Step 2: Fetch all user's clubs
-            clubs = self.service.get_clubs()
-            logger.info(f"Fetched {len(clubs)} clubs from Strava")
+            # Sync clubs from Strava
+            self._sync_clubs()
 
-            # Step 3: Merge with config
-            new_clubs = self.settings.merge_clubs(
-                [{"id": c.id, "name": c.name, "city": c.city} for c in clubs]
-            )
-            if new_clubs > 0:
-                logger.info(f"Added {new_clubs} new clubs to config")
-
-            # Step 4: Save config
-            self.settings.save()
-
-            # Step 5: Get enabled club IDs
+            # Get enabled club IDs
             club_ids = self.settings.get_club_ids()
             if not club_ids:
                 return SyncResult(
@@ -298,35 +416,21 @@ class MenuBarController:
                     message="No clubs enabled. Edit config to enable clubs.",
                 )
 
-            # Step 6: Fetch events from enabled clubs
-            events = self.service.get_club_events(club_ids)
-            logger.info(f"Fetched {len(events)} events from {len(club_ids)} enabled clubs")
+            # Fetch and filter events
+            events, fetch_errors = self._sync_events(club_ids)
 
-            # Step 7: Apply flooding prevention filters
-            events = self._filter_events(events)
-
-            # Step 8: Store events for menu display (sorted by date)
+            # Store for menu display
             self.last_events = sorted(events, key=lambda e: e.start_datetime)
 
-            # Step 9: Sync to Apple Calendar
-            result = sync_events_to_calendar(events, self.settings.calendar_name)
+            # Sync to calendar
+            return self._sync_to_calendar(events, fetch_errors)
 
-            if result.success:
-                self.last_sync = datetime.now()
-                logger.info(f"Sync completed: {result.events_added} events")
-
-                # Build notification message with event details
-                message = self._build_sync_message(events, result.events_added)
-                return SyncResult(success=True, message=message)
-            else:
-                logger.error(f"Sync failed: {result.message}")
-                return SyncResult(success=False, message=result.message)
         except (StravaError, httpx.HTTPError, CalendarError, OSError, ValueError) as e:
             logger.error(f"Sync error: {e}")
             show_dev_error("Sync Failed", e, "Running calendar sync")
-            return SyncResult(success=False, message=str(e)[:100])
+            return SyncResult(success=False, message=_categorize_error(e))
 
-    def _filter_events(self, events: list) -> list:
+    def _filter_events(self, events: list[ClubEvent]) -> list[ClubEvent]:
         """Apply flooding prevention filters.
 
         Filters by:
@@ -365,7 +469,7 @@ class MenuBarController:
 
         return events
 
-    def _build_sync_message(self, events: list, added_count: int) -> str:
+    def _build_sync_message(self, events: list[ClubEvent], added_count: int) -> str:
         """Build notification message with event details.
 
         - 0 events: "No upcoming events"
@@ -389,7 +493,7 @@ class MenuBarController:
             parts = [f"{name}: {count}" for name, count in sorted(club_counts.items())]
             return f"{added_count} events • " + ", ".join(parts)
 
-    def get_upcoming_events(self, limit: int = 7) -> list:
+    def get_upcoming_events(self, limit: int = 7) -> list[ClubEvent]:
         """Get upcoming events for menu display.
 
         Includes today's events (even if past start time) and future events.
@@ -716,7 +820,17 @@ def create_app(rumps_module=None, controller=None):
             logger.info(f"Notification (dev): {subtitle} - {message}")
 
     class ClubCalendarApp(rumps.App):
-        """Menu bar app for syncing Strava club events."""
+        """Menu bar app for syncing Strava club events.
+
+        This class is defined inside create_app() because:
+        1. rumps is an optional dependency (macOS only)
+        2. The class must inherit from rumps.App
+        3. @rumps.clicked decorators need rumps at class definition time
+
+        Thread safety: Background operations (sync, OAuth) run in daemon threads.
+        Menu updates from background threads use NSOperationQueue.mainQueue() for
+        thread-safe AppKit access.
+        """
 
         def __init__(self):
             # Look for menu bar icon in common locations
@@ -797,7 +911,21 @@ def create_app(rumps_module=None, controller=None):
             Thread(target=do_sync, daemon=True).start()
 
         def _get_day_label(self, event_dt: datetime) -> DayLabel:
-            """Get day label for event grouping."""
+            """Categorize event date for menu grouping.
+
+            Returns DayLabel with formatted string and flags for:
+            - Today: "Today (Mon, 16 Dec):"
+            - Tomorrow: "Tomorrow (Tue, 17 Dec):"
+            - This week: "Wednesday (18 Dec):"
+            - Next week: "22 Dec (Mon):"
+            - Beyond: "25 Dec (Thu):"
+
+            Args:
+                event_dt: Event datetime (expected to be localized)
+
+            Returns:
+                DayLabel with label string and week categorization flags
+            """
             now = datetime.now(event_dt.tzinfo or UTC)
             event_date = event_dt.date()
             today = now.date()
@@ -1040,14 +1168,26 @@ def create_app(rumps_module=None, controller=None):
             self.menu.add(rumps.MenuItem("Quit", callback=self.quit_app))
 
         def _update_menu_on_main_thread(self) -> None:
-            """Schedule menu update on main thread (required by AppKit)."""
+            """Schedule menu update on main thread (required by AppKit).
+
+            Uses NSOperationQueue for thread-safe menu updates. In test environments
+            without PyObjC, logs a warning - callers should mock this method.
+            """
             try:
                 from Foundation import NSOperationQueue
 
                 NSOperationQueue.mainQueue().addOperationWithBlock_(self._update_menu)
             except ImportError:
-                # Fallback for testing without PyObjC
-                self._update_menu()
+                # In tests, this should be mocked. Direct call from background thread
+                # would cause race conditions with AppKit, so we log and skip.
+                logger.warning(
+                    "Foundation not available - skipping menu update from background thread"
+                )
+                # Only safe to call directly if we're on the main thread (e.g., in tests)
+                import threading
+
+                if threading.current_thread() is threading.main_thread():
+                    self._update_menu()
 
         def sync_now(self, _) -> None:
             """Run sync command in background thread."""

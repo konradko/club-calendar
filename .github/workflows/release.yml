@@ -33,7 +33,7 @@ jobs:
 
       - name: Build app
         run: |
-          uv run pyinstaller --clean --noconfirm deploy/macos-menubar/ClubCalendar.spec
+          uv run pyinstaller --clean --noconfirm deploy/ClubCalendar.spec
 
       - name: Create DMG
         env:

@@ -138,6 +138,24 @@ class StravaClient:
         }
         return f"{self._auth_url}?" + "&".join(f"{k}={v}" for k, v in params.items())
 
+    def _process_token_response(self, data: dict) -> TokenResponse:
+        """Process token response data and update internal state.
+
+        Args:
+            data: Token response data from Strava API
+
+        Returns:
+            TokenResponse with the token data
+        """
+        self._access_token = data["access_token"]
+        self._refresh_token = data["refresh_token"]
+        self._token_expires_at = data["expires_at"]
+        return TokenResponse(
+            access_token=data["access_token"],
+            refresh_token=data["refresh_token"],
+            expires_at=data["expires_at"],
+        )
+
     def exchange_code(self, code: str) -> TokenResponse:
         """Exchange authorization code for tokens."""
         response = self._http.post(
@@ -150,15 +168,7 @@ class StravaClient:
             },
         )
         self._handle_response_errors(response)
-        data = response.json()
-        self._access_token = data["access_token"]
-        self._refresh_token = data["refresh_token"]
-        self._token_expires_at = data["expires_at"]
-        return TokenResponse(
-            access_token=data["access_token"],
-            refresh_token=data["refresh_token"],
-            expires_at=data["expires_at"],
-        )
+        return self._process_token_response(response.json())
 
     def refresh_access_token(self) -> TokenResponse:
         """Refresh the access token using the refresh token."""
@@ -175,15 +185,7 @@ class StravaClient:
             },
         )
         self._handle_response_errors(response)
-        data = response.json()
-        self._access_token = data["access_token"]
-        self._refresh_token = data["refresh_token"]
-        self._token_expires_at = data["expires_at"]
-        return TokenResponse(
-            access_token=data["access_token"],
-            refresh_token=data["refresh_token"],
-            expires_at=data["expires_at"],
-        )
+        return self._process_token_response(response.json())
 
     @property
     def refresh_token(self) -> str | None:
@@ -285,11 +287,18 @@ class StravaClient:
             )
         return events
 
-    def get_all_club_events(self, club_ids: list[int]) -> list[ClubEvent]:
+    def get_all_club_events(
+        self, club_ids: list[int]
+    ) -> tuple[list[ClubEvent], list[tuple[int, Exception]]]:
         """Get events from multiple clubs concurrently.
 
         Uses a thread pool to fetch events from all clubs in parallel,
         significantly reducing total sync time for users with many clubs.
+
+        Returns:
+            Tuple of (events, errors) where errors is a list of (club_id, exception)
+            tuples for any clubs that failed to fetch. Callers should check errors
+            to determine if the sync was complete.
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -316,10 +325,10 @@ class StravaClient:
                     # Auth errors should fail the whole sync
                     raise result
                 elif isinstance(result, Exception):
-                    # Non-auth errors - log and continue
+                    # Non-auth errors - log and continue with partial results
                     logger.warning(f"Failed to fetch events for club {club_id}: {result}")
                     errors.append((club_id, result))
                 else:
                     all_events.extend(result)
 
-        return all_events
+        return all_events, errors

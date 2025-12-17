@@ -14,6 +14,24 @@ from club_calendar.core.strava import Club, ClubEvent, StravaClient, StravaError
 
 logger = logging.getLogger(__name__)
 
+# Error message length limit for UI display
+MAX_ERROR_MESSAGE_LENGTH = 150
+
+
+def _truncate_error(message: str, max_length: int = MAX_ERROR_MESSAGE_LENGTH) -> str:
+    """Truncate error message for display, preserving meaning.
+
+    Args:
+        message: Error message to truncate
+        max_length: Maximum length (default 150)
+
+    Returns:
+        Truncated message with ellipsis if needed
+    """
+    if len(message) <= max_length:
+        return message
+    return message[: max_length - 3] + "..."
+
 
 @dataclass
 class OAuthResult:
@@ -164,11 +182,11 @@ class ClubCalendarService:
             return OAuthResult(success=False, message=str(e))
         except (httpx.HTTPError, httpx.TimeoutException, json.JSONDecodeError) as e:
             logger.error(f"OAuth exchange error: {e}")
-            return OAuthResult(success=False, message=str(e)[:100])
+            return OAuthResult(success=False, message=_truncate_error(str(e)))
         except Exception as e:
             # Catch any unexpected errors
             logger.error(f"OAuth exchange error (unexpected): {e}")
-            return OAuthResult(success=False, message=str(e)[:100])
+            return OAuthResult(success=False, message=_truncate_error(str(e)))
         finally:
             client.close()
 
@@ -297,17 +315,21 @@ class ClubCalendarService:
     # Event Operations
     # =========================================================================
 
-    def get_club_events(self, club_ids: list[int]) -> list[ClubEvent]:
+    def get_club_events(
+        self, club_ids: list[int]
+    ) -> tuple[list[ClubEvent], list[tuple[int, Exception]]]:
         """Fetch events for given clubs.
 
         Args:
             club_ids: List of club IDs to fetch events for
 
         Returns:
-            List of club events
+            Tuple of (events, errors) where errors is a list of (club_id, exception)
+            tuples for any clubs that failed. Callers should check errors to
+            determine if the sync was complete.
 
         Raises:
-            StravaError: On API errors
+            StravaAuthError: On authentication errors (fails entire operation)
         """
         with self._create_client() as client:
             return client.get_all_club_events(club_ids)

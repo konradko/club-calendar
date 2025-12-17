@@ -423,7 +423,7 @@ class TestGetClubEvents:
 
         service = ClubCalendarService(client_id="id", client_secret="secret", refresh_token="token")
 
-        events = service.get_club_events([123])
+        events, errors = service.get_club_events([123])
 
         assert len(events) == 1
         assert events[0].title == "Morning Ride"

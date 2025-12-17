@@ -233,7 +233,7 @@ def test_get_all_club_events_handles_errors(httpx_mock: HTTPXMock):
     httpx_mock.add_callback(handler, is_reusable=True, is_optional=True)
 
     with StravaClient("id", "secret", refresh_token="token") as client:
-        events = client.get_all_club_events([123, 456])
+        events, errors = client.get_all_club_events([123, 456])
 
     # Should get events from club 456 even though 123 failed
     assert len(events) == 1

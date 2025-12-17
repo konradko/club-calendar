@@ -16,6 +16,13 @@ fi
 
 echo "Generating icons from icon.svg..."
 
+# Verify icon.svg exists
+if [ ! -f "icon.svg" ]; then
+    echo "ERROR: icon.svg not found in $(pwd)"
+    echo "Please ensure icon.svg exists in the project root."
+    exit 1
+fi
+
 # App icon (1024x1024 for .icns generation)
 rsvg-convert -w 1024 -h 1024 icon.svg -o deploy/icon.png
 echo "  Generated: deploy/icon.png (1024x1024)"

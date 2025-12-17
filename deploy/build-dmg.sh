@@ -29,6 +29,14 @@ rm -rf "$BUILD_DIR" "$DIST_DIR"
 # Generate menubar icons from SVG
 echo ""
 echo "Generating menubar icons from SVG..."
+
+# Verify icon.svg exists
+if [ ! -f "icon.svg" ]; then
+    echo "ERROR: icon.svg not found in $(pwd)"
+    echo "Please ensure icon.svg exists in the project root."
+    exit 1
+fi
+
 if ! command -v rsvg-convert &> /dev/null; then
     echo "Installing librsvg..."
     brew install librsvg

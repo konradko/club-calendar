@@ -620,7 +620,7 @@ class TestMenuBarController:
 
         # Sync fails when auth fails
         assert result.success is False
-        assert "Invalid" in result.message or "expired" in result.message
+        assert "Authentication failed" in result.message
 
     def test_open_config_file(self, mock_settings, tmp_path):
         """Test opening config file."""
