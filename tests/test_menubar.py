@@ -7,7 +7,8 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from club_calendar.menubar import (
+from club_calendar.core.models import SetupResult, SyncResult
+from club_calendar.menubar.app import (
     MenuBarController,
     OAuthCallbackHandler,
     _import_rumps,
@@ -15,7 +16,6 @@ from club_calendar.menubar import (
     main,
     run_oauth_server,
 )
-from club_calendar.models import CommandResult, SetupResult, SyncResult
 
 
 @pytest.fixture
@@ -95,22 +95,6 @@ class TestSyncResult:
         assert result.message == "Error"
 
 
-class TestCommandResult:
-    """Tests for CommandResult dataclass."""
-
-    def test_success_result(self):
-        """Test successful command result."""
-        result = CommandResult(success=True, output="Output text")
-        assert result.success is True
-        assert result.output == "Output text"
-
-    def test_failure_result(self):
-        """Test failed command result."""
-        result = CommandResult(success=False, output="Error")
-        assert result.success is False
-        assert result.output == "Error"
-
-
 class TestSetupResult:
     """Tests for SetupResult dataclass."""
 
@@ -138,7 +122,7 @@ class TestMenuBarController:
 
     def test_init_default_settings(self):
         """Test initialization with default settings."""
-        with patch("club_calendar.menubar.get_settings") as mock_get:
+        with patch("club_calendar.menubar.app.get_settings") as mock_get:
             mock_get.return_value = MagicMock()
             MenuBarController()
             mock_get.assert_called_once()
@@ -234,15 +218,6 @@ class TestMenuBarController:
         mock_settings.has_refresh_token.return_value = True
         assert controller.needs_auth() is False
 
-    def test_needs_clubs(self, mock_settings):
-        """Test needs_clubs always returns False (clubs auto-fetched)."""
-        mock_settings.has_strava_credentials.return_value = True
-        mock_settings.has_refresh_token.return_value = True
-        mock_settings.get_club_ids.return_value = []
-        controller = MenuBarController(settings=mock_settings)
-        # With auto-fetch, needs_clubs is always False
-        assert controller.needs_clubs() is False
-
     def test_is_ready(self, mock_settings):
         """Test is_ready when credentials and auth present (clubs auto-fetched)."""
         controller = MenuBarController(settings=mock_settings)
@@ -275,7 +250,7 @@ class TestMenuBarController:
 
     def test_validate_strava_access_api_error(self, mock_settings, mock_strava_api):
         """Test validate_strava_access when API returns error."""
-        from club_calendar_core.strava import StravaError
+        from club_calendar.core.strava import StravaError
 
         controller = MenuBarController(settings=mock_settings)
         error = StravaError("API error 401: Unauthorized")
@@ -298,7 +273,7 @@ class TestMenuBarController:
     def test_validate_calendar_access_granted(self, mock_settings):
         """Test validate_calendar_access when access is granted."""
         controller = MenuBarController(settings=mock_settings)
-        target = "club_calendar.eventkit.request_calendar_access"
+        target = "club_calendar.menubar.eventkit.request_calendar_access"
         with patch(target, return_value=(True, None)):
             success, message = controller.validate_calendar_access()
 
@@ -308,7 +283,7 @@ class TestMenuBarController:
     def test_validate_calendar_access_denied(self, mock_settings):
         """Test validate_calendar_access when access is denied."""
         controller = MenuBarController(settings=mock_settings)
-        target = "club_calendar.eventkit.request_calendar_access"
+        target = "club_calendar.menubar.eventkit.request_calendar_access"
         with patch(target, return_value=(False, "Permission denied")):
             success, message = controller.validate_calendar_access()
 
@@ -318,7 +293,7 @@ class TestMenuBarController:
     def test_validate_calendar_access_error(self, mock_settings):
         """Test validate_calendar_access when exception occurs."""
         controller = MenuBarController(settings=mock_settings)
-        target = "club_calendar.eventkit.request_calendar_access"
+        target = "club_calendar.menubar.eventkit.request_calendar_access"
         with patch(target, side_effect=Exception("EventKit error")):
             success, message = controller.validate_calendar_access()
 
@@ -344,7 +319,7 @@ class TestMenuBarController:
 
     def test_run_sync_success(self, mock_settings, mock_strava_api):
         """Test successful sync with HTTP mocks."""
-        from club_calendar.eventkit import SyncResult as EventKitSyncResult
+        from club_calendar.menubar.eventkit import SyncResult as EventKitSyncResult
 
         # Setup settings with merge_clubs mock
         mock_settings.merge_clubs.return_value = 0  # No new clubs
@@ -354,7 +329,7 @@ class TestMenuBarController:
         with (
             patch.object(controller, "reload_settings"),  # Skip reload to keep mock
             patch(
-                "club_calendar.menubar.sync_events_to_calendar",
+                "club_calendar.menubar.app.sync_events_to_calendar",
                 return_value=EventKitSyncResult(
                     success=True, message="Synced 4 events to Apple Calendar", events_added=4
                 ),
@@ -369,7 +344,7 @@ class TestMenuBarController:
 
     def test_run_sync_no_events(self, mock_settings, httpx_mock):
         """Test sync with no events."""
-        from club_calendar.eventkit import SyncResult as EventKitSyncResult
+        from club_calendar.menubar.eventkit import SyncResult as EventKitSyncResult
 
         mock_settings.merge_clubs.return_value = 0
 
@@ -396,10 +371,13 @@ class TestMenuBarController:
         httpx_mock.add_callback(handler, is_reusable=True)
         controller = MenuBarController(settings=mock_settings)
 
-        with patch(
-            "club_calendar.menubar.sync_events_to_calendar",
-            return_value=EventKitSyncResult(
-                success=True, message="No events to sync", events_added=0
+        with (
+            patch.object(controller, "reload_settings"),  # Skip reload to keep mock
+            patch(
+                "club_calendar.menubar.app.sync_events_to_calendar",
+                return_value=EventKitSyncResult(
+                    success=True, message="No events to sync", events_added=0
+                ),
             ),
         ):
             result = controller.run_sync()
@@ -408,15 +386,18 @@ class TestMenuBarController:
 
     def test_run_sync_eventkit_error(self, mock_settings, mock_strava_api):
         """Test sync handles EventKit errors."""
-        from club_calendar.eventkit import SyncResult as EventKitSyncResult
+        from club_calendar.menubar.eventkit import SyncResult as EventKitSyncResult
 
         mock_settings.merge_clubs.return_value = 0
 
         controller = MenuBarController(settings=mock_settings)
 
-        with patch(
-            "club_calendar.menubar.sync_events_to_calendar",
-            return_value=EventKitSyncResult(success=False, message="Calendar access denied"),
+        with (
+            patch.object(controller, "reload_settings"),  # Skip reload to keep mock
+            patch(
+                "club_calendar.menubar.app.sync_events_to_calendar",
+                return_value=EventKitSyncResult(success=False, message="Calendar access denied"),
+            ),
         ):
             result = controller.run_sync()
 
@@ -438,7 +419,7 @@ class TestMenuBarController:
 
     def test_run_sync_preserves_user_enabled_choices(self, mock_settings, mock_strava_api):
         """Test sync merges clubs and preserves user's enabled/disabled choices."""
-        from club_calendar.eventkit import SyncResult as EventKitSyncResult
+        from club_calendar.menubar.eventkit import SyncResult as EventKitSyncResult
 
         # User has disabled club 456
         mock_settings.clubs = {
@@ -453,7 +434,7 @@ class TestMenuBarController:
         with (
             patch.object(controller, "reload_settings"),  # Skip reload to keep mock
             patch(
-                "club_calendar.menubar.sync_events_to_calendar",
+                "club_calendar.menubar.app.sync_events_to_calendar",
                 return_value=EventKitSyncResult(success=True, message="OK", events_added=1),
             ),
         ):
@@ -468,7 +449,7 @@ class TestMenuBarController:
     def test_filter_events_limits_per_week(self, mock_settings):
         """Test _filter_events applies per-club per-week limits."""
 
-        from club_calendar_core.strava import ClubEvent
+        from club_calendar.core.strava import ClubEvent
 
         mock_settings.sync_weeks = 52
         mock_settings.max_events_per_club_per_week = 2
@@ -503,7 +484,7 @@ class TestMenuBarController:
     def test_filter_events_respects_sync_weeks(self, mock_settings):
         """Test _filter_events filters out events beyond sync_weeks."""
 
-        from club_calendar_core.strava import ClubEvent
+        from club_calendar.core.strava import ClubEvent
 
         mock_settings.sync_weeks = 1  # Only 1 week
         mock_settings.max_events_per_club_per_week = 0  # Unlimited
@@ -544,7 +525,7 @@ class TestMenuBarController:
 
     def test_build_sync_message_few_events(self, mock_settings):
         """Test _build_sync_message with 1-2 events shows titles."""
-        from club_calendar_core.strava import ClubEvent
+        from club_calendar.core.strava import ClubEvent
 
         mock_settings.merge_clubs.return_value = 0
         controller = MenuBarController(settings=mock_settings)
@@ -569,7 +550,7 @@ class TestMenuBarController:
 
     def test_build_sync_message_many_events(self, mock_settings):
         """Test _build_sync_message with 3+ events shows club counts."""
-        from club_calendar_core.strava import ClubEvent
+        from club_calendar.core.strava import ClubEvent
 
         mock_settings.merge_clubs.return_value = 0
         mock_settings.clubs = {
@@ -631,34 +612,12 @@ class TestMenuBarController:
         )
         controller = MenuBarController(settings=mock_settings)
 
-        result = controller.run_sync()
+        with patch.object(controller, "reload_settings"):  # Skip reload to keep mock
+            result = controller.run_sync()
 
         # Sync fails when auth fails
         assert result.success is False
         assert "Invalid" in result.message or "expired" in result.message
-
-    def test_run_auth_success(self, mock_settings):
-        """Test running auth command via osascript."""
-        controller = MenuBarController(settings=mock_settings)
-
-        with patch("club_calendar.menubar.subprocess.run") as mock_run:
-            result = controller.run_auth()
-
-            assert result.success is True
-            assert "Terminal" in result.output
-            mock_run.assert_called_once()
-
-    def test_run_auth_failure(self, mock_settings):
-        """Test auth command failure."""
-        controller = MenuBarController(settings=mock_settings)
-
-        with patch("club_calendar.menubar.subprocess.run") as mock_run:
-            mock_run.side_effect = OSError("osascript not found")
-
-            result = controller.run_auth()
-
-            assert result.success is False
-            assert "osascript" in result.output
 
     def test_open_config_file(self, mock_settings, tmp_path):
         """Test opening config file."""
@@ -667,8 +626,8 @@ class TestMenuBarController:
         config_path.write_text('{"test": true}')
 
         with (
-            patch("club_calendar.menubar.get_config_file", return_value=config_path),
-            patch("club_calendar.menubar.subprocess.run") as mock_run,
+            patch("club_calendar.menubar.app.get_config_file", return_value=config_path),
+            patch("club_calendar.menubar.app.subprocess.run") as mock_run,
         ):
             controller.open_config_file()
             mock_run.assert_called_once_with(["open", str(config_path)])
@@ -679,8 +638,8 @@ class TestMenuBarController:
         config_path = tmp_path / "config.json"
 
         with (
-            patch("club_calendar.menubar.get_config_file", return_value=config_path),
-            patch("club_calendar.menubar.subprocess.run") as mock_run,
+            patch("club_calendar.menubar.app.get_config_file", return_value=config_path),
+            patch("club_calendar.menubar.app.subprocess.run") as mock_run,
         ):
             controller.open_config_file()
             mock_settings.save.assert_called_once()
@@ -693,8 +652,8 @@ class TestMenuBarController:
         log_path.touch()  # Create the file
 
         with (
-            patch("club_calendar.menubar.LOG_FILE", log_path),
-            patch("club_calendar.menubar.subprocess.run") as mock_run,
+            patch("club_calendar.menubar.app.LOG_FILE", log_path),
+            patch("club_calendar.menubar.app.subprocess.run") as mock_run,
         ):
             controller.view_logs()
             mock_run.assert_called_once_with(["open", str(log_path)])
@@ -708,8 +667,8 @@ class TestMenuBarController:
         assert not log_path.exists()
 
         with (
-            patch("club_calendar.menubar.LOG_FILE", log_path),
-            patch("club_calendar.menubar.subprocess.run") as mock_run,
+            patch("club_calendar.menubar.app.LOG_FILE", log_path),
+            patch("club_calendar.menubar.app.subprocess.run") as mock_run,
         ):
             controller.view_logs()
             # File should now exist (touch was called)
@@ -721,7 +680,7 @@ class TestMenuBarController:
         controller = MenuBarController(settings=mock_settings)
         new_settings = MagicMock()
 
-        with patch("club_calendar.menubar.get_settings", return_value=new_settings):
+        with patch("club_calendar.menubar.app.get_settings", return_value=new_settings):
             controller.reload_settings()
 
             assert controller.settings == new_settings
@@ -850,7 +809,7 @@ class TestMenuBarController:
 
         with (
             patch.object(MenuBarController, "_get_launch_agent_path", return_value=plist_path),
-            patch("club_calendar.menubar.get_logs_dir", return_value=logs_dir),
+            patch("club_calendar.menubar.app.get_logs_dir", return_value=logs_dir),
             patch("subprocess.run") as mock_run,
         ):
             result = controller.enable_login()
@@ -867,7 +826,7 @@ class TestMenuBarController:
 
         with (
             patch.object(MenuBarController, "_get_launch_agent_path", return_value=plist_path),
-            patch("club_calendar.menubar.get_logs_dir", side_effect=OSError("err")),
+            patch("club_calendar.menubar.app.get_logs_dir", side_effect=OSError("err")),
         ):
             result = controller.enable_login()
 
@@ -1079,7 +1038,7 @@ class TestRunOAuthServer:
         """Test OAuth server handles callback."""
         controller = MenuBarController(settings=mock_settings)
 
-        with patch("club_calendar.menubar.HTTPServer") as mock_server_class:
+        with patch("club_calendar.menubar.app.HTTPServer") as mock_server_class:
             mock_server = MagicMock()
             mock_server_class.return_value = mock_server
 
@@ -1096,7 +1055,7 @@ class TestRunOAuthServer:
         """Test OAuth server timeout."""
         controller = MenuBarController(settings=mock_settings)
 
-        with patch("club_calendar.menubar.HTTPServer") as mock_server_class:
+        with patch("club_calendar.menubar.app.HTTPServer") as mock_server_class:
             mock_server = MagicMock()
             mock_server_class.return_value = mock_server
             OAuthCallbackHandler.result = None
@@ -1168,7 +1127,7 @@ class TestCreateApp:
         with (
             patch.object(controller, "validate_calendar_access") as mock_validate,
             patch.object(controller, "run_sync") as mock_sync,
-            patch("club_calendar.menubar.Thread", SyncThread),
+            patch("club_calendar.menubar.app.Thread", SyncThread),
         ):
             mock_validate.return_value = (True, "OK")
             mock_sync.return_value = SyncResult(success=True, message="Done")
@@ -1194,7 +1153,7 @@ class TestCreateApp:
         with (
             patch.object(controller, "validate_calendar_access") as mock_validate,
             patch.object(controller, "run_sync") as mock_sync,
-            patch("club_calendar.menubar.Thread", SyncThread),
+            patch("club_calendar.menubar.app.Thread", SyncThread),
         ):
             mock_validate.return_value = (True, "OK")
             mock_sync.return_value = SyncResult(success=False, message="Error")
@@ -1223,7 +1182,7 @@ class TestCreateApp:
         with (
             patch.object(controller, "validate_calendar_access") as mock_validate,
             patch.object(controller, "run_sync") as mock_sync,
-            patch("club_calendar.menubar.Thread", SyncThread),
+            patch("club_calendar.menubar.app.Thread", SyncThread),
         ):
             mock_validate.return_value = (True, "OK")
             mock_sync.return_value = SyncResult(success=True, message="2 events")
@@ -1254,7 +1213,7 @@ class TestCreateApp:
         with (
             patch.object(controller, "validate_calendar_access") as mock_validate,
             patch.object(controller, "run_sync") as mock_sync,
-            patch("club_calendar.menubar.Thread", SyncThread),
+            patch("club_calendar.menubar.app.Thread", SyncThread),
         ):
             mock_validate.return_value = (True, "OK")
             mock_sync.return_value = SyncResult(success=False, message="API error")
@@ -1352,7 +1311,7 @@ class TestCreateApp:
 
     def test_create_app_uses_default_controller(self, mock_rumps):
         """Test create_app creates controller if not provided."""
-        with patch("club_calendar.menubar.MenuBarController") as mock_controller_class:
+        with patch("club_calendar.menubar.app.MenuBarController") as mock_controller_class:
             mock_controller = MagicMock()
             mock_controller.get_status_text.return_value = "Not synced"
             mock_controller.get_config_status.return_value = ("OK", True)
@@ -1369,7 +1328,7 @@ class TestCreateApp:
         """Test create_app imports rumps if not provided."""
         controller = MenuBarController(settings=mock_settings)
 
-        with patch("club_calendar.menubar._import_rumps") as mock_import:
+        with patch("club_calendar.menubar.app._import_rumps") as mock_import:
             mock_rumps = MagicMock()
             mock_rumps.separator = "---"
             mock_rumps.MenuItem = MagicMock()
@@ -1417,11 +1376,13 @@ class TestCreateApp:
 
     def test_create_app_run_auth_success(self, mock_rumps, mock_settings):
         """Test run_auth with valid credentials."""
+        # Disable sync_on_startup to avoid Thread call during app init
+        mock_settings.sync_on_startup = False
         controller = MenuBarController(settings=mock_settings)
 
         with (
             patch.object(controller, "start_oauth_flow") as mock_oauth,
-            patch("club_calendar.menubar.Thread") as mock_thread,
+            patch("club_calendar.menubar.app.Thread") as mock_thread,
         ):
             mock_oauth.return_value = SetupResult(success=True, message="Started")
 
@@ -1464,7 +1425,7 @@ class TestCreateApp:
 
         controller = MenuBarController(settings=mock_settings)
 
-        with patch("club_calendar.menubar.Path"):
+        with patch("club_calendar.menubar.app.Path"):
             # This is complex to mock, so let's test via the app creation
             app = create_app(rumps_module=mock_rumps, controller=controller)
             # App should be created successfully
@@ -1478,88 +1439,10 @@ class TestMain:
         """Test main creates app and runs it."""
         mock_app = MagicMock()
 
-        with patch("club_calendar.menubar.create_app", return_value=mock_app):
+        with patch("club_calendar.menubar.app.create_app", return_value=mock_app):
             main()
 
             mock_app.run.assert_called_once()
-
-
-class TestGetEventEmoji:
-    """Tests for _get_event_emoji method."""
-
-    def test_emoji_from_activity_type_ride(self, mock_rumps, mock_settings):
-        """Test ride emoji from activity type."""
-        controller = MenuBarController(settings=mock_settings)
-        app = create_app(rumps_module=mock_rumps, controller=controller)
-
-        assert app._get_event_emoji("Event", "Ride") == "🚴"
-        assert app._get_event_emoji("Event", "Cycling") == "🚴"
-
-    def test_emoji_from_activity_type_run(self, mock_rumps, mock_settings):
-        """Test run emoji from activity type."""
-        controller = MenuBarController(settings=mock_settings)
-        app = create_app(rumps_module=mock_rumps, controller=controller)
-
-        assert app._get_event_emoji("Event", "Run") == "🏃"
-
-    def test_emoji_from_activity_type_swim(self, mock_rumps, mock_settings):
-        """Test swim emoji from activity type."""
-        controller = MenuBarController(settings=mock_settings)
-        app = create_app(rumps_module=mock_rumps, controller=controller)
-
-        assert app._get_event_emoji("Event", "Swim") == "🏊"
-
-    def test_emoji_from_activity_type_hike(self, mock_rumps, mock_settings):
-        """Test hike/walk emoji from activity type."""
-        controller = MenuBarController(settings=mock_settings)
-        app = create_app(rumps_module=mock_rumps, controller=controller)
-
-        assert app._get_event_emoji("Event", "Hike") == "🥾"
-        assert app._get_event_emoji("Event", "Walk") == "🥾"
-
-    def test_emoji_from_title_ride(self, mock_rumps, mock_settings):
-        """Test ride emoji from title fallback."""
-        controller = MenuBarController(settings=mock_settings)
-        app = create_app(rumps_module=mock_rumps, controller=controller)
-
-        assert app._get_event_emoji("Saturday Ride", None) == "🚴"
-        assert app._get_event_emoji("Cycling Club", None) == "🚴"
-        assert app._get_event_emoji("Bike to Work", None) == "🚴"
-        assert app._get_event_emoji("Weekly Cycle", None) == "🚴"
-
-    def test_emoji_from_title_run(self, mock_rumps, mock_settings):
-        """Test run emoji from title fallback."""
-        controller = MenuBarController(settings=mock_settings)
-        app = create_app(rumps_module=mock_rumps, controller=controller)
-
-        assert app._get_event_emoji("Morning Run", None) == "🏃"
-        assert app._get_event_emoji("Running Club", None) == "🏃"
-        assert app._get_event_emoji("Easy Jog", None) == "🏃"
-
-    def test_emoji_from_title_swim(self, mock_rumps, mock_settings):
-        """Test swim emoji from title fallback."""
-        controller = MenuBarController(settings=mock_settings)
-        app = create_app(rumps_module=mock_rumps, controller=controller)
-
-        assert app._get_event_emoji("Pool Swim", None) == "🏊"
-        assert app._get_event_emoji("Swimming Session", None) == "🏊"
-
-    def test_emoji_from_title_hike(self, mock_rumps, mock_settings):
-        """Test hike/walk emoji from title fallback."""
-        controller = MenuBarController(settings=mock_settings)
-        app = create_app(rumps_module=mock_rumps, controller=controller)
-
-        assert app._get_event_emoji("Trail Hike", None) == "🥾"
-        assert app._get_event_emoji("Hiking Group", None) == "🥾"
-        assert app._get_event_emoji("Evening Walk", None) == "🥾"
-
-    def test_emoji_default(self, mock_rumps, mock_settings):
-        """Test default calendar emoji."""
-        controller = MenuBarController(settings=mock_settings)
-        app = create_app(rumps_module=mock_rumps, controller=controller)
-
-        assert app._get_event_emoji("Club Meeting", None) == "📅"
-        assert app._get_event_emoji("Social Event", "") == "📅"
 
 
 class TestGetUpcomingEvents:
@@ -1568,7 +1451,7 @@ class TestGetUpcomingEvents:
     def test_includes_todays_past_events(self, mock_settings):
         """Test that today's past events are included."""
 
-        from club_calendar_core.strava import ClubEvent
+        from club_calendar.core.strava import ClubEvent
 
         controller = MenuBarController(settings=mock_settings)
         now = datetime.now(UTC)
@@ -1614,7 +1497,7 @@ class TestGetUpcomingEvents:
     def test_excludes_yesterdays_events(self, mock_settings):
         """Test that yesterday's events are excluded."""
 
-        from club_calendar_core.strava import ClubEvent
+        from club_calendar.core.strava import ClubEvent
 
         controller = MenuBarController(settings=mock_settings)
         now = datetime.now(UTC)
@@ -1736,7 +1619,7 @@ class TestDayLabelAndMenuFiltering:
     def test_menu_excludes_events_beyond_next_week(self, mock_rumps, mock_settings):
         """Test that events beyond next week are not shown in menu."""
 
-        from club_calendar_core.strava import ClubEvent
+        from club_calendar.core.strava import ClubEvent
 
         controller = MenuBarController(settings=mock_settings)
 
@@ -1795,7 +1678,7 @@ class TestDayLabelAndMenuFiltering:
     def test_menu_shows_next_week_day_header(self, mock_rumps, mock_settings):
         """Test that next week events show day headers."""
 
-        from club_calendar_core.strava import ClubEvent
+        from club_calendar.core.strava import ClubEvent
 
         controller = MenuBarController(settings=mock_settings)
 

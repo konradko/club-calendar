@@ -8,7 +8,7 @@ install:
 
 # Run all tests with coverage
 test:
-	uv run pytest tests/ -q --tb=short --cov=club_calendar_core --cov=club_calendar --cov-report=term-missing
+	uv run pytest tests/ -q --tb=short --cov=club_calendar --cov-report=term-missing
 
 # Run pre-commit hooks manually
 pre-commit:
@@ -29,7 +29,6 @@ dev:
 		--patterns="*.py" \
 		--recursive \
 		--directory=src \
-		--directory=packages/core/src \
 		-- python -m club_calendar.menubar
 
 # Mock server configuration
@@ -60,7 +59,6 @@ dev-mock:
 		--patterns="*.py" \
 		--recursive \
 		--directory=src \
-		--directory=packages/core/src \
 		-- python -m club_calendar.menubar || true
 	@echo "Cleaning up mock server..."
 	@pkill -f "mock_strava_server.py" 2>/dev/null || true

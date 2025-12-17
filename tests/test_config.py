@@ -5,8 +5,7 @@ from unittest.mock import patch
 
 import yaml
 
-from club_calendar.config import (
-    ConfigTokenStore,
+from club_calendar.menubar.config import (
     Settings,
     get_config_dir,
     get_config_file,
@@ -23,7 +22,7 @@ class TestConfigFunctions:
         fake_home = tmp_path / "home"
         fake_home.mkdir()
 
-        with patch("club_calendar.config.Path.home", return_value=fake_home):
+        with patch("club_calendar.menubar.config.Path.home", return_value=fake_home):
             result = get_config_dir()
 
         expected = fake_home / "Library" / "Application Support" / "Club Calendar"
@@ -45,7 +44,7 @@ class TestConfigFunctions:
         fake_home = tmp_path / "home"
         fake_home.mkdir()
 
-        with patch("club_calendar.config.Path.home", return_value=fake_home):
+        with patch("club_calendar.menubar.config.Path.home", return_value=fake_home):
             result = get_logs_dir()
 
         expected = fake_home / "Library" / "Logs" / "Club Calendar"
@@ -311,7 +310,7 @@ class TestSettingsClass:
 
     def test_settings_schema_version_upgrade(self, mock_config_file):
         """Test that old config without schema_version gets upgraded."""
-        from club_calendar.config import CURRENT_SCHEMA_VERSION
+        from club_calendar.menubar.config import CURRENT_SCHEMA_VERSION
 
         # Write old-style config without schema_version
         old_config = {
@@ -338,7 +337,7 @@ class TestSettingsClass:
 
     def test_settings_schema_version_current_no_upgrade(self, mock_config_file):
         """Test that current schema version doesn't trigger upgrade."""
-        from club_calendar.config import CURRENT_SCHEMA_VERSION
+        from club_calendar.menubar.config import CURRENT_SCHEMA_VERSION
 
         # Create settings with current version
         settings = Settings(
@@ -362,48 +361,3 @@ class TestSettingsClass:
 
         # File should not have been modified (no upgrade needed)
         assert mtime_before == mtime_after
-
-
-class TestConfigTokenStore:
-    """Tests for ConfigTokenStore class."""
-
-    def test_get_refresh_token(self, mock_config_file):
-        """Test get_refresh_token reads from config."""
-        mock_config_file.write_text(yaml.dump({"strava_refresh_token": "my_token"}))
-
-        store = ConfigTokenStore()
-        result = store.get_refresh_token()
-
-        assert result == "my_token"
-
-    def test_get_refresh_token_returns_none_when_empty(self, mock_config_file):
-        """Test get_refresh_token returns None when not set."""
-        mock_config_file.write_text(yaml.dump({}))
-
-        store = ConfigTokenStore()
-        result = store.get_refresh_token()
-
-        assert result is None
-
-    def test_save_refresh_token(self, mock_config_file):
-        """Test save_refresh_token writes to config."""
-        mock_config_file.write_text(yaml.dump({"strava_client_id": "test"}))
-
-        store = ConfigTokenStore()
-        store.save_refresh_token("new_token")
-
-        # Reload and verify
-        settings = Settings.load()
-        assert settings.strava_refresh_token == "new_token"
-
-    def test_get_access_token_returns_none(self):
-        """Test get_access_token always returns None (not persisted)."""
-        store = ConfigTokenStore()
-        result = store.get_access_token()
-        assert result is None
-
-    def test_save_access_token_is_noop(self):
-        """Test save_access_token does nothing (not persisted)."""
-        store = ConfigTokenStore()
-        store.save_access_token("token", 9999999999)
-        assert store.get_access_token() is None

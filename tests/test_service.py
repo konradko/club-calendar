@@ -10,8 +10,9 @@ import urllib.error
 import urllib.request
 
 import pytest
-from club_calendar_core.service import ClubCalendarService
 from pytest_httpx import HTTPXMock
+
+from club_calendar.core.service import ClubCalendarService
 
 
 def find_free_port() -> int:
@@ -272,8 +273,8 @@ class TestFilterLocalClubs:
 
     def test_auto_detect_city_from_most_common(self):
         """Test auto-detecting city from most common club city."""
-        from club_calendar_core.service import filter_local_clubs
-        from club_calendar_core.strava import Club
+        from club_calendar.core.service import filter_local_clubs
+        from club_calendar.core.strava import Club
 
         clubs = [
             Club(id=1, name="Club 1", member_count=50, city="Portland", state="OR", country="US"),
@@ -289,8 +290,8 @@ class TestFilterLocalClubs:
 
     def test_explicit_city_filter(self):
         """Test filtering with explicit city list."""
-        from club_calendar_core.service import filter_local_clubs
-        from club_calendar_core.strava import Club
+        from club_calendar.core.service import filter_local_clubs
+        from club_calendar.core.strava import Club
 
         clubs = [
             Club(id=1, name="Club 1", member_count=50, city="Portland", state="OR", country="US"),
@@ -305,8 +306,8 @@ class TestFilterLocalClubs:
 
     def test_no_cities_in_clubs(self):
         """Test when clubs have no city data."""
-        from club_calendar_core.service import filter_local_clubs
-        from club_calendar_core.strava import Club
+        from club_calendar.core.service import filter_local_clubs
+        from club_calendar.core.strava import Club
 
         clubs = [
             Club(id=1, name="Club 1", member_count=50, city=None, state=None, country=None),
@@ -320,8 +321,8 @@ class TestFilterLocalClubs:
 
     def test_max_members_filter(self):
         """Test filtering out mega-clubs by member count."""
-        from club_calendar_core.service import filter_local_clubs
-        from club_calendar_core.strava import Club
+        from club_calendar.core.service import filter_local_clubs
+        from club_calendar.core.strava import Club
 
         clubs = [
             Club(
@@ -341,78 +342,6 @@ class TestFilterLocalClubs:
 
         assert len(local) == 1
         assert local[0].name == "Small Club"
-
-
-class TestTokenStoreIntegration:
-    """Tests for TokenStore integration in service."""
-
-    def test_refresh_token_getter_with_store(self):
-        """Test refresh_token property reads from token store."""
-        from unittest.mock import MagicMock
-
-        mock_store = MagicMock()
-        mock_store.get_refresh_token.return_value = "stored_token"
-
-        service = ClubCalendarService(
-            client_id="id",
-            client_secret="secret",
-            token_store=mock_store,
-        )
-
-        assert service.refresh_token == "stored_token"
-        mock_store.get_refresh_token.assert_called_once()
-
-    def test_refresh_token_setter_with_store(self):
-        """Test refresh_token setter saves to token store."""
-        from unittest.mock import MagicMock
-
-        mock_store = MagicMock()
-
-        service = ClubCalendarService(
-            client_id="id",
-            client_secret="secret",
-            token_store=mock_store,
-        )
-
-        service.refresh_token = "new_token"
-
-        mock_store.save_refresh_token.assert_called_once_with("new_token")
-        assert service._refresh_token == "new_token"
-
-    def test_refresh_token_setter_with_none_value(self):
-        """Test refresh_token setter with None value doesn't save to store."""
-        from unittest.mock import MagicMock
-
-        mock_store = MagicMock()
-
-        service = ClubCalendarService(
-            client_id="id",
-            client_secret="secret",
-            token_store=mock_store,
-        )
-
-        service.refresh_token = None
-
-        mock_store.save_refresh_token.assert_not_called()
-        assert service._refresh_token is None
-
-
-class TestServiceFilterLocalClubsMethod:
-    """Tests for service.filter_local_clubs method (delegation)."""
-
-    def test_filter_local_clubs_delegates_to_function(self):
-        """Test that service method delegates to module function."""
-        from club_calendar_core.strava import Club
-
-        service = ClubCalendarService(client_id="id", client_secret="secret", refresh_token="token")
-
-        clubs = [
-            Club(id=1, name="Club", member_count=50, city="Portland", state="OR", country="US")
-        ]
-        local, cities = service.filter_local_clubs(clubs, cities=["Portland"])
-
-        assert len(local) == 1
-        assert cities == ["Portland"]
 
 
 class TestGetClubs:
@@ -502,7 +431,8 @@ class TestGetClubEvents:
     def test_get_club_events_auth_error_reraises(self, httpx_mock: HTTPXMock):
         """Test get_club_events re-raises auth errors."""
         import httpx
-        from club_calendar_core.strava import StravaAuthError
+
+        from club_calendar.core.strava import StravaAuthError
 
         call_count = {"token": 0}
 

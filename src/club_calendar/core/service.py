@@ -7,8 +7,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
 from urllib.parse import parse_qs, urlparse
 
-from club_calendar_core.ports import TokenStore
-from club_calendar_core.strava import Club, ClubEvent, StravaClient, StravaError, TokenResponse
+from club_calendar.core.strava import Club, ClubEvent, StravaClient, StravaError, TokenResponse
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +63,6 @@ class ClubCalendarService:
         client_id: str,
         client_secret: str,
         refresh_token: str | None = None,
-        token_store: TokenStore | None = None,
         api_base_url: str | None = None,
     ):
         """Initialize the service.
@@ -72,28 +70,22 @@ class ClubCalendarService:
         Args:
             client_id: Strava API client ID
             client_secret: Strava API client secret
-            refresh_token: OAuth refresh token (for simple usage)
-            token_store: Token storage backend (for persistent storage)
+            refresh_token: OAuth refresh token
             api_base_url: Override Strava API base URL (for testing)
         """
         self.client_id = client_id
         self.client_secret = client_secret
         self._refresh_token = refresh_token
-        self._token_store = token_store
         self._api_base_url = api_base_url
 
     @property
     def refresh_token(self) -> str | None:
-        """Get refresh token from store or instance."""
-        if self._token_store:
-            return self._token_store.get_refresh_token()
+        """Get the current refresh token."""
         return self._refresh_token
 
     @refresh_token.setter
     def refresh_token(self, value: str | None) -> None:
-        """Set refresh token in store or instance."""
-        if self._token_store and value:
-            self._token_store.save_refresh_token(value)
+        """Set the refresh token."""
         self._refresh_token = value
 
     def _create_client(self, require_token: bool = True) -> StravaClient:
@@ -285,18 +277,6 @@ class ClubCalendarService:
         """
         with self._create_client() as client:
             return client.get_athlete_clubs()
-
-    def filter_local_clubs(
-        self,
-        clubs: list[Club],
-        cities: list[str] | None = None,
-        max_members: int = 100000,
-    ) -> tuple[list[Club], list[str]]:
-        """Filter clubs to local ones based on city.
-
-        Delegates to module-level pure function. Kept for API compatibility.
-        """
-        return filter_local_clubs(clubs, cities, max_members)
 
     # =========================================================================
     # Event Operations

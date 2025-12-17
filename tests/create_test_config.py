@@ -3,7 +3,7 @@
 
 import os
 
-from club_calendar.config import Settings
+from club_calendar.menubar.config import Settings
 
 # Set config dir from env or use default
 config_dir = os.environ.get("CLUB_CALENDAR_CONFIG_DIR")

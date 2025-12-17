@@ -2,13 +2,14 @@
 
 import httpx
 import pytest
-from club_calendar_core.strava import (
+from pytest_httpx import HTTPXMock
+
+from club_calendar.core.strava import (
     StravaAuthError,
     StravaClient,
     StravaError,
     StravaRateLimitError,
 )
-from pytest_httpx import HTTPXMock
 
 
 @pytest.fixture

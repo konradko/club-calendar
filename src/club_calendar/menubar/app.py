@@ -19,17 +19,16 @@ try:
 except ImportError:
     HAS_APPKIT = False
 
-from club_calendar_core.service import ClubCalendarService, OAuthResult
-
-from club_calendar.config import (
-    Settings,
-    get_config_file,
-    get_logs_dir,
-    get_settings,
-    get_token_store,
+from club_calendar.core.models import SetupResult, SyncResult
+from club_calendar.core.service import ClubCalendarService, OAuthResult
+from club_calendar.menubar.config import Settings, get_config_file, get_logs_dir, get_settings
+from club_calendar.menubar.eventkit import sync_events_to_calendar
+from club_calendar.menubar.utils import (
+    DayLabel,
+    get_activity_emoji,
+    oauth_error_html,
+    oauth_success_html,
 )
-from club_calendar.eventkit import sync_events_to_calendar
-from club_calendar.models import CommandResult, SetupResult, SyncResult
 
 # Set up logging
 LOG_FILE = get_logs_dir() / "club-calendar.log"
@@ -58,7 +57,6 @@ def _create_service(settings: Settings) -> ClubCalendarService:
     return ClubCalendarService(
         client_id=settings.strava_client_id,
         client_secret=settings.strava_client_secret,
-        token_store=get_token_store(),
         refresh_token=settings.strava_refresh_token,
         api_base_url=settings.strava_api_base or None,
     )
@@ -128,14 +126,6 @@ class MenuBarController:
         """Check if authentication is needed."""
         return self.settings.has_strava_credentials() and not self.settings.has_refresh_token()
 
-    def needs_clubs(self) -> bool:
-        """Check if club configuration is needed.
-
-        With auto-fetch, this is no longer a setup step - clubs are fetched on first sync.
-        Returns False since clubs are managed via config file.
-        """
-        return False
-
     def is_ready(self) -> bool:
         """Check if app is fully configured and ready to sync.
 
@@ -169,7 +159,7 @@ class MenuBarController:
         Returns:
             Tuple of (success, message)
         """
-        from club_calendar.eventkit import request_calendar_access
+        from club_calendar.menubar.eventkit import request_calendar_access
 
         try:
             granted, error = request_calendar_access()
@@ -356,15 +346,6 @@ class MenuBarController:
         # Open Calendar app - it will show today's view
         # Unfortunately there's no direct way to open a specific event by URL
         subprocess.run(["open", "-a", "Calendar"])
-
-    def run_auth(self) -> CommandResult:
-        """Run the auth command in Terminal."""
-        script = 'tell app "Terminal" to do script "club-calendar auth"'
-        try:
-            subprocess.run(["osascript", "-e", script], check=True)
-            return CommandResult(success=True, output="Opening Terminal for authentication...")
-        except Exception as e:
-            return CommandResult(success=False, output=str(e))
 
     def open_config_file(self) -> None:
         """Open config file in default editor."""
@@ -578,33 +559,14 @@ class OAuthCallbackHandler:
                 self.send_header("Content-type", "text/html")
                 self.end_headers()
                 if OAuthCallbackHandler.result.success:
-                    self.wfile.write(
-                        b"<html><body>"
-                        b"<h1>Club Calendar</h1>"
-                        b"<p><strong>Authentication successful!</strong></p>"
-                        b"<p>You can close this window.</p>"
-                        b"</body></html>"
-                    )
+                    self.wfile.write(oauth_success_html())
                 else:
-                    msg = OAuthCallbackHandler.result.message
-                    self.wfile.write(
-                        f"<html><body>"
-                        f"<h1>Club Calendar</h1>"
-                        f"<p><strong>Authentication failed</strong></p>"
-                        f"<p>{msg}</p>"
-                        f"</body></html>".encode()
-                    )
+                    self.wfile.write(oauth_error_html(OAuthCallbackHandler.result.message))
             else:
                 self.send_response(400)
                 self.send_header("Content-type", "text/html")
                 self.end_headers()
-                self.wfile.write(
-                    b"<html><body>"
-                    b"<h1>Club Calendar</h1>"
-                    b"<p><strong>Authentication failed</strong></p>"
-                    b"<p>Missing authorization code</p>"
-                    b"</body></html>"
-                )
+                self.wfile.write(oauth_error_html("Missing authorization code"))
         else:
             self.send_response(404)
             self.end_headers()
@@ -716,57 +678,20 @@ def create_app(rumps_module=None, controller=None):
 
         def _sync_on_startup(self) -> None:
             """Run initial sync in background thread."""
-            import threading
 
             def do_sync():
                 result = self.controller.run_sync()
                 if result.success:
                     self._update_menu_on_main_thread()
 
-            threading.Thread(target=do_sync, daemon=True).start()
+            Thread(target=do_sync, daemon=True).start()
 
-        def _get_event_emoji(self, title: str, activity_type: str | None = None) -> str:
-            """Get emoji for event based on activity type or title keywords.
-
-            Args:
-                title: Event title (used as fallback)
-                activity_type: Strava activity type (e.g., "Ride", "Run") from API
-            """
-            # Check API-provided activity_type first
-            if activity_type:
-                activity_lower = activity_type.lower()
-                if "ride" in activity_lower or "cycling" in activity_lower:
-                    return "🚴"
-                if "run" in activity_lower:
-                    return "🏃"
-                if "swim" in activity_lower:
-                    return "🏊"
-                if "hike" in activity_lower or "walk" in activity_lower:
-                    return "🥾"
-
-            # Fall back to title-based detection
-            title_lower = title.lower()
-            if any(w in title_lower for w in ["ride", "cycling", "cycle", "bike"]):
-                return "🚴"
-            if any(w in title_lower for w in ["run", "running", "jog"]):
-                return "🏃"
-            if any(w in title_lower for w in ["swim", "swimming"]):
-                return "🏊"
-            if any(w in title_lower for w in ["hike", "hiking", "walk"]):
-                return "🥾"
-            return "📅"
-
-        def _get_day_label(self, event_dt: datetime) -> tuple[str, bool, bool, bool]:
-            """Get day label for event grouping.
-
-            Returns:
-                Tuple of (day_label, is_this_week, is_today, is_next_week)
-            """
+        def _get_day_label(self, event_dt: datetime) -> DayLabel:
+            """Get day label for event grouping."""
             now = datetime.now(event_dt.tzinfo or UTC)
             event_date = event_dt.date()
             today = now.date()
 
-            # Check if this week or next week (same ISO week and year)
             event_year, event_week, _ = event_dt.isocalendar()
             now_year, current_week, _ = now.isocalendar()
             is_this_week = event_year == now_year and event_week == current_week
@@ -775,32 +700,20 @@ def create_app(rumps_module=None, controller=None):
             )
 
             if event_date == today:
-                return f"Today ({event_dt.strftime('%a, %d %b')}):", True, True, False
+                label = f"Today ({event_dt.strftime('%a, %d %b')}):"
+                return DayLabel(label, is_this_week=True, is_today=True, is_next_week=False)
             elif event_date == today + timedelta(days=1):
-                return f"Tomorrow ({event_dt.strftime('%a, %d %b')}):", True, False, False
+                label = f"Tomorrow ({event_dt.strftime('%a, %d %b')}):"
+                return DayLabel(label, is_this_week=True, is_today=False, is_next_week=False)
             elif is_this_week:
-                return (
-                    f"{event_dt.strftime('%A')} ({event_dt.strftime('%d %b')}):",
-                    True,
-                    False,
-                    False,
-                )
+                label = f"{event_dt.strftime('%A')} ({event_dt.strftime('%d %b')}):"
+                return DayLabel(label, is_this_week=True, is_today=False, is_next_week=False)
             elif is_next_week:
-                # Next week: "24 Dec (Wed):" - date first
-                return (
-                    f"{event_dt.strftime('%d %b')} ({event_dt.strftime('%a')}):",
-                    False,
-                    False,
-                    True,
-                )
+                label = f"{event_dt.strftime('%d %b')} ({event_dt.strftime('%a')}):"
+                return DayLabel(label, is_this_week=False, is_today=False, is_next_week=True)
             else:
-                # Beyond next week: same format as next week
-                return (
-                    f"{event_dt.strftime('%d %b')} ({event_dt.strftime('%a')}):",
-                    False,
-                    False,
-                    False,
-                )
+                label = f"{event_dt.strftime('%d %b')} ({event_dt.strftime('%a')}):"
+                return DayLabel(label, is_this_week=False, is_today=False, is_next_week=False)
 
         def _create_muted_menu_item(self, label: str, callback) -> "rumps.MenuItem":
             """Create a menu item with muted (gray) text for event details.
@@ -876,7 +789,7 @@ def create_app(rumps_module=None, controller=None):
                 is_today: Whether event is today
                 is_this_week: Whether event is this week (affects format)
             """
-            emoji = self._get_event_emoji(event.title, event.activity_type)
+            emoji = get_activity_emoji(event.activity_type)
             club = event.club_name
             title = event.title[:25] + "…" if len(event.title) > 25 else event.title
 
@@ -897,6 +810,96 @@ def create_app(rumps_module=None, controller=None):
                 )
             self.menu.add(item)
 
+        def _build_events_section(self, max_events: int) -> None:
+            """Build the upcoming events section of the menu."""
+            upcoming = self.controller.get_upcoming_events(limit=50)
+            if not upcoming:
+                return
+
+            # Separate this week and next week events
+            this_week_events = []
+            next_week_events = []
+
+            for event in upcoming:
+                dt = event.start_datetime.astimezone()
+                day_label, is_this_week, is_today, is_next_week = self._get_day_label(dt)
+                if is_this_week:
+                    this_week_events.append((event, dt, day_label, is_today))
+                elif is_next_week:
+                    next_week_events.append((event, dt, day_label))
+
+            # Apply total limit: this week first, then next week
+            total_shown = 0
+            current_label = None
+
+            # This week events
+            for event, dt, day_label, is_today in this_week_events:
+                if max_events > 0 and total_shown >= max_events:
+                    break
+
+                # Day header
+                if day_label != current_label:
+                    if day_label.startswith("Today"):
+                        self.menu.add(self._create_bold_prefix_menu_item("Today", day_label[5:]))
+                    elif day_label.startswith("Tomorrow"):
+                        self.menu.add(self._create_bold_prefix_menu_item("Tomorrow", day_label[8:]))
+                    else:
+                        self.menu.add(rumps.MenuItem(day_label, callback=None))
+                    current_label = day_label
+
+                total_shown += 1
+                self._add_event_menu_item(event, dt, is_today, is_this_week=True)
+
+            # Next week events (fill remaining slots)
+            if next_week_events and (max_events == 0 or total_shown < max_events):
+                self.menu.add(rumps.separator)
+                next_week_label = None
+
+                for event, dt, day_label in next_week_events:
+                    if max_events > 0 and total_shown >= max_events:
+                        break
+
+                    # Day header within next week
+                    if day_label != next_week_label:
+                        self.menu.add(rumps.MenuItem(day_label, callback=None))
+                        next_week_label = day_label
+
+                    total_shown += 1
+                    self._add_event_menu_item(event, dt, is_today=False, is_this_week=False)
+
+            self.menu.add(rumps.separator)
+
+        def _build_settings_menu(self) -> "rumps.MenuItem":
+            """Build the settings submenu."""
+            settings_menu = rumps.MenuItem("Settings")
+
+            # Sync interval
+            interval_menu = rumps.MenuItem("Sync interval")
+            current_interval = self.controller.get_sync_interval()
+            for minutes, label in [
+                (0, "Disabled"),
+                (30, "30 min"),
+                (60, "1 hour"),
+                (120, "2 hours"),
+                (240, "4 hours"),
+            ]:
+                item = rumps.MenuItem(
+                    label, callback=lambda _, m=minutes: self.set_sync_interval(m)
+                )
+                item.state = current_interval == minutes
+                interval_menu.add(item)
+            settings_menu.add(interval_menu)
+
+            login_item = rumps.MenuItem("Start at login", callback=self.toggle_login)
+            login_item.state = self.controller.is_login_enabled()
+            settings_menu.add(login_item)
+
+            settings_menu.add(rumps.separator)
+            settings_menu.add(rumps.MenuItem("Edit config...", callback=self.edit_config))
+            settings_menu.add(rumps.MenuItem("View logs...", callback=self.view_logs))
+
+            return settings_menu
+
         def _update_menu(self) -> None:
             """Update menu items based on current state."""
             self.menu.clear()
@@ -904,99 +907,14 @@ def create_app(rumps_module=None, controller=None):
             if self.controller.is_ready():
                 # Upcoming events grouped by day
                 max_events = self.controller.settings.max_menu_events
-
-                upcoming = self.controller.get_upcoming_events(limit=50)
-                if upcoming:
-                    # Separate this week and next week events
-                    this_week_events = []
-                    next_week_events = []
-
-                    for event in upcoming:
-                        dt = event.start_datetime.astimezone()
-                        day_label, is_this_week, is_today, is_next_week = self._get_day_label(dt)
-                        if is_this_week:
-                            this_week_events.append((event, dt, day_label, is_today))
-                        elif is_next_week:
-                            next_week_events.append((event, dt, day_label))
-
-                    # Apply total limit: this week first, then next week
-                    total_shown = 0
-                    current_label = None
-
-                    # This week events
-                    for event, dt, day_label, is_today in this_week_events:
-                        if max_events > 0 and total_shown >= max_events:
-                            break
-
-                        # Day header
-                        if day_label != current_label:
-                            if day_label.startswith("Today"):
-                                self.menu.add(
-                                    self._create_bold_prefix_menu_item("Today", day_label[5:])
-                                )
-                            elif day_label.startswith("Tomorrow"):
-                                self.menu.add(
-                                    self._create_bold_prefix_menu_item("Tomorrow", day_label[8:])
-                                )
-                            else:
-                                self.menu.add(rumps.MenuItem(day_label, callback=None))
-                            current_label = day_label
-
-                        total_shown += 1
-                        self._add_event_menu_item(event, dt, is_today, is_this_week=True)
-
-                    # Next week events (fill remaining slots)
-                    if next_week_events and (max_events == 0 or total_shown < max_events):
-                        self.menu.add(rumps.separator)
-                        next_week_label = None
-
-                        for event, dt, day_label in next_week_events:
-                            if max_events > 0 and total_shown >= max_events:
-                                break
-
-                            # Day header within next week
-                            if day_label != next_week_label:
-                                self.menu.add(rumps.MenuItem(day_label, callback=None))
-                                next_week_label = day_label
-
-                            total_shown += 1
-                            self._add_event_menu_item(event, dt, is_today=False, is_this_week=False)
-
-                    self.menu.add(rumps.separator)
+                self._build_events_section(max_events)
 
                 # Main actions
                 self.menu.add(rumps.MenuItem("Sync now", callback=self.sync_now))
                 self.menu.add(rumps.separator)
 
                 # Settings submenu
-                settings_menu = rumps.MenuItem("Settings")
-
-                # Sync interval
-                interval_menu = rumps.MenuItem("Sync interval")
-                current_interval = self.controller.get_sync_interval()
-                for minutes, label in [
-                    (0, "Disabled"),
-                    (30, "30 min"),
-                    (60, "1 hour"),
-                    (120, "2 hours"),
-                    (240, "4 hours"),
-                ]:
-                    item = rumps.MenuItem(
-                        label, callback=lambda _, m=minutes: self.set_sync_interval(m)
-                    )
-                    item.state = current_interval == minutes
-                    interval_menu.add(item)
-                settings_menu.add(interval_menu)
-
-                login_item = rumps.MenuItem("Start at login", callback=self.toggle_login)
-                login_item.state = self.controller.is_login_enabled()
-                settings_menu.add(login_item)
-
-                settings_menu.add(rumps.separator)
-                settings_menu.add(rumps.MenuItem("Edit config...", callback=self.edit_config))
-                settings_menu.add(rumps.MenuItem("View logs...", callback=self.view_logs))
-
-                self.menu.add(settings_menu)
+                self.menu.add(self._build_settings_menu())
             elif not self.controller.settings.has_strava_credentials():
                 # Step 1: Need credentials - click opens config
                 self.menu.add(

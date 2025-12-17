@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import TypedDict
 
 import yaml
-from club_calendar_core.ports import TokenStore
 
 logger = logging.getLogger(__name__)
 
@@ -40,27 +39,6 @@ def get_logs_dir() -> Path:
 def get_config_file() -> Path:
     """Get the path to the config file."""
     return get_config_dir() / "config.yaml"
-
-
-class ConfigTokenStore(TokenStore):
-    """Token storage using config file."""
-
-    def get_refresh_token(self) -> str | None:
-        settings = Settings.load()
-        return settings.strava_refresh_token or None
-
-    def save_refresh_token(self, token: str) -> None:
-        settings = Settings.load()
-        settings.strava_refresh_token = token
-        settings.save()
-
-    def get_access_token(self) -> tuple[str, int] | None:
-        """Access tokens are short-lived and not persisted."""
-        return None
-
-    def save_access_token(self, token: str, expires_at: int) -> None:
-        """Access tokens are short-lived and not persisted."""
-        pass
 
 
 class ClubInfo(TypedDict):
@@ -369,8 +347,3 @@ strava_api_base: "{self.strava_api_base}"  # e.g. http://localhost:51679/api/v3
 def get_settings() -> Settings:
     """Get application settings instance."""
     return Settings.load()
-
-
-def get_token_store() -> ConfigTokenStore:
-    """Get token store instance."""
-    return ConfigTokenStore()

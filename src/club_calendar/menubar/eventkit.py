@@ -1,11 +1,12 @@
 """EventKit integration for syncing events to Apple Calendar."""
 
 import logging
+import threading
 from datetime import timedelta
 
-from club_calendar_core.strava import ClubEvent
-
-from club_calendar.models import SyncResult
+from club_calendar.core.models import SyncResult
+from club_calendar.core.strava import ClubEvent
+from club_calendar.menubar.utils import get_activity_emoji
 
 logger = logging.getLogger(__name__)
 
@@ -32,8 +33,6 @@ def _get_event_store():
     store = EventKit.EKEventStore.alloc().init()
 
     # Request calendar access (will prompt user if needed)
-    import threading
-
     result = {"granted": False, "error": None}
     done = threading.Event()
 
@@ -114,31 +113,6 @@ def _find_or_create_calendar(store, calendar_name: str = DEFAULT_CALENDAR_NAME) 
     return calendar, None
 
 
-def _get_activity_emoji(title: str, activity_type: str | None = None) -> str:
-    """Get emoji for event based on activity type or title keywords."""
-    if activity_type:
-        activity_lower = activity_type.lower()
-        if "ride" in activity_lower or "cycling" in activity_lower:
-            return "🚲"
-        if "run" in activity_lower:
-            return "🏃"
-        if "swim" in activity_lower:
-            return "🏊"
-        if "hike" in activity_lower or "walk" in activity_lower:
-            return "🥾"
-
-    title_lower = title.lower()
-    if any(w in title_lower for w in ["ride", "cycling", "cycle", "bike"]):
-        return "🚲"
-    if any(w in title_lower for w in ["run", "running", "jog"]):
-        return "🏃"
-    if any(w in title_lower for w in ["swim", "swimming"]):
-        return "🏊"
-    if any(w in title_lower for w in ["hike", "hiking", "walk"]):
-        return "🥾"
-    return "📅"
-
-
 def _create_event(store, calendar, club_event: ClubEvent):
     """Create an EventKit event from a ClubEvent."""
     EventKit = _import_eventkit()  # noqa: N806
@@ -148,9 +122,9 @@ def _create_event(store, calendar, club_event: ClubEvent):
     event = EventKit.EKEvent.eventWithEventStore_(store)
     event.setCalendar_(calendar)
 
-    # Title with emoji and club name prefix: "🚴 ClubName · Event Title"
-    emoji = _get_activity_emoji(club_event.title, club_event.activity_type)
-    title = f"{emoji} {club_event.club_name} · {club_event.title}"
+    # Title with emoji and club name prefix: "🚴 ClubName: Event Title"
+    emoji = get_activity_emoji(club_event.activity_type)
+    title = f"{emoji} {club_event.club_name}: {club_event.title}"
     event.setTitle_(title)
 
     # Set start and end time (2 hour default duration)
@@ -223,6 +197,41 @@ def _find_event_by_strava_id(existing_events, strava_id: int):
     return None
 
 
+def _mark_cancelled_events(store, event_kit, existing_events, strava_event_ids: set[int]) -> int:
+    """Mark events as cancelled if they're no longer in Strava.
+
+    Args:
+        store: EventKit event store
+        event_kit: EventKit module
+        existing_events: List of existing calendar events
+        strava_event_ids: Set of current Strava event IDs
+
+    Returns:
+        Count of events marked as cancelled
+    """
+    cancelled_count = 0
+    for existing in existing_events:
+        url = existing.URL()
+        if not url:
+            continue
+
+        url_str = str(url.absoluteString())
+        existing_strava_id = _get_strava_event_id_from_url(url_str)
+
+        if existing_strava_id and existing_strava_id not in strava_event_ids:
+            title = existing.title()
+            if not title.startswith("[Cancelled]"):
+                existing.setTitle_(f"[Cancelled] {title}")
+                try:
+                    store.saveEvent_span_error_(existing, event_kit.EKSpanThisEvent, None)
+                    cancelled_count += 1
+                    logger.info(f"Marked as cancelled: {title}")
+                except Exception as e:
+                    logger.warning(f"Failed to mark event as cancelled: {e}")
+
+    return cancelled_count
+
+
 def sync_events_to_calendar(
     events: list[ClubEvent], calendar_name: str = DEFAULT_CALENDAR_NAME
 ) -> SyncResult:
@@ -268,7 +277,6 @@ def sync_events_to_calendar(
     strava_event_ids = {e.id for e in events}
     added_count = 0
     updated_count = 0
-    cancelled_count = 0
 
     # Add or update events from Strava
     for club_event in events:
@@ -290,25 +298,7 @@ def sync_events_to_calendar(
             logger.warning(f"Failed to sync event {club_event.title}: {e}")
 
     # Mark cancelled events (in calendar but no longer in Strava)
-    for existing in existing_events:
-        url = existing.URL()
-        if not url:
-            continue
-
-        url_str = str(url.absoluteString())
-        existing_strava_id = _get_strava_event_id_from_url(url_str)
-
-        if existing_strava_id and existing_strava_id not in strava_event_ids:
-            # Event no longer in Strava - mark as cancelled
-            title = existing.title()
-            if not title.startswith("[Cancelled]"):
-                existing.setTitle_(f"[Cancelled] {title}")
-                try:
-                    store.saveEvent_span_error_(existing, EventKit.EKSpanThisEvent, None)
-                    cancelled_count += 1
-                    logger.info(f"Marked as cancelled: {title}")
-                except Exception as e:
-                    logger.warning(f"Failed to mark event as cancelled: {e}")
+    cancelled_count = _mark_cancelled_events(store, EventKit, existing_events, strava_event_ids)
 
     # Commit changes
     try:
@@ -341,9 +331,9 @@ def _update_event(event, club_event: ClubEvent):
 
     from Foundation import NSDate, NSTimeZone
 
-    # Title with emoji and club name prefix: "🚴 ClubName · Event Title"
-    emoji = _get_activity_emoji(club_event.title, club_event.activity_type)
-    title = f"{emoji} {club_event.club_name} · {club_event.title}"
+    # Title with emoji and club name prefix: "🚴 ClubName: Event Title"
+    emoji = get_activity_emoji(club_event.activity_type)
+    title = f"{emoji} {club_event.club_name}: {club_event.title}"
     event.setTitle_(title)
 
     # Update times
@@ -379,8 +369,6 @@ def request_calendar_access() -> tuple[bool, str]:
 
     # For macOS 10.14+, we need to request full access
     # This will show a system prompt to the user
-    import threading
-
     result = {"granted": False, "error": None}
     done = threading.Event()
 

@@ -96,12 +96,11 @@ make dmg
 
 ```
 club-calendar/
-├── src/
-│   └── club_calendar/    # Menu bar app
-├── packages/
-│   └── core/                   # Strava API library
-├── tests/                      # All tests
-├── deploy/                     # Build scripts
+├── src/club_calendar/
+│   ├── core/           # Pure Python logic (strava, service, models)
+│   └── menubar/        # macOS-specific (app, config, eventkit, utils)
+├── tests/              # All tests (unified)
+├── deploy/             # Build scripts (dmg, icons)
 └── Makefile
 ```
 

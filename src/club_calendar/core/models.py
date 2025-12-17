@@ -14,14 +14,6 @@ class SyncResult:
 
 
 @dataclass
-class CommandResult:
-    """Result of a shell command."""
-
-    success: bool
-    output: str
-
-
-@dataclass
 class SetupResult:
     """Result of a setup operation."""
 
