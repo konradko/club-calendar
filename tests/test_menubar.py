@@ -655,7 +655,7 @@ class TestMenuBarController:
         log_path.touch()  # Create the file
 
         with (
-            patch("club_calendar.menubar.app.LOG_FILE", log_path),
+            patch("club_calendar.menubar.app.get_logs_dir", return_value=tmp_path),
             patch("club_calendar.menubar.app.subprocess.run") as mock_run,
         ):
             controller.view_logs()
@@ -670,7 +670,7 @@ class TestMenuBarController:
         assert not log_path.exists()
 
         with (
-            patch("club_calendar.menubar.app.LOG_FILE", log_path),
+            patch("club_calendar.menubar.app.get_logs_dir", return_value=tmp_path),
             patch("club_calendar.menubar.app.subprocess.run") as mock_run,
         ):
             controller.view_logs()

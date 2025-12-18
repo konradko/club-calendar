@@ -46,27 +46,34 @@ from club_calendar.menubar.utils import (
     oauth_success_html,
 )
 
-# Set up logging
-LOG_FILE = get_logs_dir() / "club-calendar.log"
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
-# File handler - WARNING in production for performance, INFO in dev for debugging
-_log_level = logging.INFO if ".app/Contents/MacOS" not in sys.executable else logging.WARNING
-logging.basicConfig(
-    filename=str(LOG_FILE),
-    level=_log_level,
-    format=LOG_FORMAT,
-    datefmt=LOG_DATEFMT,
-)
 logger = logging.getLogger(__name__)
 
-# Console handler for dev mode (not running from .app bundle)
-if ".app/Contents/MacOS" not in sys.executable:
-    console = logging.StreamHandler()
-    console.setLevel(logging.INFO)
-    console.setFormatter(logging.Formatter(LOG_FORMAT, LOG_DATEFMT))
-    logging.getLogger().addHandler(console)
+
+def setup_logging(settings: Settings) -> None:
+    """Configure logging based on settings."""
+    if settings.log_output == "none":
+        logging.disable(logging.CRITICAL)
+        return
+
+    level = logging.INFO if settings.debug else logging.WARNING
+    formatter = logging.Formatter(LOG_FORMAT, LOG_DATEFMT)
+    root = logging.getLogger()
+    root.setLevel(level)
+
+    if settings.log_output == "file":
+        handler = logging.FileHandler(get_logs_dir() / "club-calendar.log")
+    elif settings.log_output == "console":
+        handler = logging.StreamHandler()
+    else:
+        logging.disable(logging.CRITICAL)
+        return
+
+    handler.setLevel(level)
+    handler.setFormatter(formatter)
+    root.addHandler(handler)
 
 
 def is_dev_mode() -> bool:
@@ -530,9 +537,10 @@ class MenuBarController:
 
     def view_logs(self) -> None:
         """Open log file in default text editor."""
-        if not LOG_FILE.exists():
-            LOG_FILE.touch()
-        subprocess.run(["open", str(LOG_FILE)])
+        log_file = get_logs_dir() / "club-calendar.log"
+        if not log_file.exists():
+            log_file.touch()
+        subprocess.run(["open", str(log_file)])
 
     def reload_settings(self) -> None:
         """Reload settings from config file."""
@@ -811,6 +819,9 @@ def create_app(rumps_module=None, controller=None):
     """
     rumps = rumps_module or _import_rumps()
     controller = controller or MenuBarController()
+
+    # Configure logging based on settings
+    setup_logging(controller.settings)
 
     def notify(title, subtitle="", message=""):
         """Send notification, ignoring errors in dev mode (no Info.plist)."""

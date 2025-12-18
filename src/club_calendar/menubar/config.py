@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Config schema version - bump when adding new fields or changing structure
 # Comment/example changes don't require version bump (will update on next save)
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 
 def get_config_dir() -> Path:
@@ -90,6 +90,10 @@ class Settings:
 
     # OAuth callback port for Strava authentication (49152-65535 range avoids conflicts)
     oauth_callback_port: int = 51678
+
+    # Logging
+    debug: bool = False  # Enable verbose logging (INFO level)
+    log_output: str = "none"  # "console", "file", or "none"
 
     # Flooding prevention
     max_events_per_club_per_week: int = 10  # Max events per club per week (0 = unlimited)
@@ -231,6 +235,10 @@ calendar_name: "{self.calendar_name}"
 # OAuth callback port (49152-65535 range recommended)
 oauth_callback_port: {self.oauth_callback_port}
 
+# Logging
+debug: {str(self.debug).lower()}  # Enable verbose logging
+log_output: "{self.log_output}"  # "console", "file", or "none"
+
 {cities_block}
 
 {clubs_block}
@@ -302,6 +310,10 @@ oauth_callback_port: {self.oauth_callback_port}
         calendar_name = config.get("calendar_name", "Club Calendar")
         oauth_callback_port = config.get("oauth_callback_port", 51678)
 
+        # Logging
+        debug = config.get("debug", False)
+        log_output = config.get("log_output", "none")
+
         # Strava API URLs (for mock server testing)
         strava_api_url = config.get("strava_api_url", "")
         strava_token_url = config.get("strava_token_url", "")
@@ -324,6 +336,8 @@ oauth_callback_port: {self.oauth_callback_port}
             max_menu_events=max_menu_events,
             calendar_name=calendar_name,
             oauth_callback_port=oauth_callback_port,
+            debug=debug,
+            log_output=log_output,
             strava_api_url=strava_api_url,
             strava_token_url=strava_token_url,
             strava_auth_url=strava_auth_url,
