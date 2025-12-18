@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 # Config schema version - bump when adding new fields or changing structure
 # Comment/example changes don't require version bump (will update on next save)
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 
 def get_config_dir() -> Path:
@@ -94,6 +94,9 @@ class Settings:
     # Logging
     debug: bool = False  # Enable verbose logging (INFO level)
     log_output: str = "none"  # "console", "file", or "none"
+
+    # Auto-reload config on file change
+    auto_reload_config: bool = False
 
     # Flooding prevention
     max_events_per_club_per_week: int = 10  # Max events per club per week (0 = unlimited)
@@ -238,6 +241,7 @@ oauth_callback_port: {self.oauth_callback_port}
 # Logging
 debug: {str(self.debug).lower()}  # Enable verbose logging
 log_output: "{self.log_output}"  # "console", "file", or "none"
+auto_reload_config: {str(self.auto_reload_config).lower()}  # Watch config file for changes
 
 {cities_block}
 
@@ -313,6 +317,7 @@ log_output: "{self.log_output}"  # "console", "file", or "none"
         # Logging
         debug = config.get("debug", False)
         log_output = config.get("log_output", "none")
+        auto_reload_config = config.get("auto_reload_config", False)
 
         # Strava API URLs (for mock server testing)
         strava_api_url = config.get("strava_api_url", "")
@@ -338,6 +343,7 @@ log_output: "{self.log_output}"  # "console", "file", or "none"
             oauth_callback_port=oauth_callback_port,
             debug=debug,
             log_output=log_output,
+            auto_reload_config=auto_reload_config,
             strava_api_url=strava_api_url,
             strava_token_url=strava_token_url,
             strava_auth_url=strava_auth_url,

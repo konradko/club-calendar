@@ -338,3 +338,28 @@ class TestSettingsClass:
 
         # File should not have been modified (no upgrade needed)
         assert mtime_before == mtime_after
+
+    def test_auto_reload_config_defaults_to_false(self):
+        """Test auto_reload_config defaults to False."""
+        settings = Settings()
+        assert settings.auto_reload_config is False
+
+    def test_auto_reload_config_save_and_load(self, mock_config_file):
+        """Test auto_reload_config saves and loads correctly."""
+        settings = Settings(auto_reload_config=True)
+        settings.save()
+
+        loaded = Settings.load()
+        assert loaded.auto_reload_config is True
+
+        # Verify it appears in the saved config
+        content = mock_config_file.read_text()
+        assert "auto_reload_config: true" in content
+
+    def test_auto_reload_config_false_in_saved_config(self, mock_config_file):
+        """Test auto_reload_config=False is saved correctly."""
+        settings = Settings(auto_reload_config=False)
+        settings.save()
+
+        content = mock_config_file.read_text()
+        assert "auto_reload_config: false" in content

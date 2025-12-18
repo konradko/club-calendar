@@ -4,13 +4,18 @@ import logging
 import plistlib
 import subprocess
 import sys
+import time
 import traceback
 import webbrowser
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from threading import Lock, Thread
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
+
+if TYPE_CHECKING:
+    from watchdog.observers import Observer
 
 import httpx
 import yaml
@@ -172,13 +177,19 @@ class MenuBarController:
     """
 
     def __init__(
-        self, settings: Settings | None = None, service: ClubCalendarService | None = None
+        self,
+        settings: Settings | None = None,
+        service: ClubCalendarService | None = None,
+        menu_update_callback: "callable | None" = None,
     ):
         self.settings = settings or get_settings()
         self._service = service
         self._lock = Lock()
         self._last_sync: datetime | None = None
         self._last_events: list[ClubEvent] = []
+        self._config_observer: Observer | None = None
+        self._menu_update_callback = menu_update_callback
+        self._start_config_watcher()
 
     @property
     def last_sync(self) -> datetime | None:
@@ -544,8 +555,69 @@ class MenuBarController:
 
     def reload_settings(self) -> None:
         """Reload settings from config file."""
+        old_auto_reload = self.settings.auto_reload_config
         self.settings = get_settings()
         self._refresh_service()
+        # Restart watcher if setting changed
+        if self.settings.auto_reload_config != old_auto_reload:
+            self._stop_config_watcher()
+            self._start_config_watcher()
+
+    def _start_config_watcher(self) -> None:
+        """Start file watcher if auto_reload_config is enabled."""
+        if not self.settings.auto_reload_config:
+            return
+        if self._config_observer is not None:
+            return  # Already running
+
+        try:
+            from watchdog.events import FileSystemEventHandler
+            from watchdog.observers import Observer
+        except ImportError:
+            logger.warning("watchdog not available, config auto-reload disabled")
+            return
+
+        config_path = get_config_file()
+        config_dir = config_path.parent
+        debounce_seconds = 0.5
+        last_reload: list[float] = [0.0]  # Mutable container for closure
+
+        class ConfigFileHandler(FileSystemEventHandler):
+            def __init__(handler_self, callback: "callable", target_path: Path):  # noqa: N805
+                handler_self._callback = callback
+                handler_self._target_path = target_path
+
+            def on_modified(handler_self, event) -> None:  # noqa: N805
+                if event.is_directory:
+                    return
+                if Path(event.src_path) != handler_self._target_path:
+                    return
+                now = time.time()
+                if now - last_reload[0] < debounce_seconds:
+                    return
+                last_reload[0] = now
+                logger.info("Config file changed, reloading...")
+                handler_self._callback()
+
+        def on_config_changed() -> None:
+            self.reload_settings()
+            if self._menu_update_callback:
+                self._menu_update_callback()
+
+        handler = ConfigFileHandler(on_config_changed, config_path)
+        self._config_observer = Observer()
+        self._config_observer.schedule(handler, str(config_dir), recursive=False)
+        self._config_observer.daemon = True
+        self._config_observer.start()
+        logger.info(f"Started config file watcher for {config_path}")
+
+    def _stop_config_watcher(self) -> None:
+        """Stop file watcher if running."""
+        if self._config_observer is not None:
+            self._config_observer.stop()
+            self._config_observer.join(timeout=1.0)
+            self._config_observer = None
+            logger.info("Stopped config file watcher")
 
     def save_credentials(self, client_id: str, client_secret: str) -> SetupResult:
         """Save Strava API credentials."""
@@ -877,6 +949,8 @@ def create_app(rumps_module=None, controller=None):
                 self._set_retina_icon(icon_path, icon_path_2x)
 
             self.controller = controller
+            # Set menu update callback for config file watcher
+            self.controller._menu_update_callback = self._update_menu_on_main_thread
             self._update_menu()
 
             # Auto-sync on startup if ready and enabled
@@ -1146,6 +1220,7 @@ def create_app(rumps_module=None, controller=None):
 
             settings_menu.add(rumps.separator)
             settings_menu.add(rumps.MenuItem("Edit config...", callback=self.edit_config))
+            settings_menu.add(rumps.MenuItem("Reload config", callback=self.reload_config))
             settings_menu.add(rumps.MenuItem("View logs...", callback=self.view_logs))
 
             return settings_menu
@@ -1312,6 +1387,12 @@ def create_app(rumps_module=None, controller=None):
             self.controller.set_sync_interval(minutes)
             self._update_menu()
             # Silent - menu checkmark shows selected interval
+
+        def reload_config(self, _) -> None:
+            """Reload config from file."""
+            self.controller.reload_settings()
+            self._update_menu()
+            notify(title="Club Calendar", subtitle="Config reloaded", message="")
 
         def view_logs(self, _) -> None:
             """Open log file."""

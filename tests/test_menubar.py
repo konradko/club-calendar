@@ -1713,3 +1713,92 @@ class TestDayLabelAndMenuFiltering:
         # Should show day header like "25 Dec (Thu):"
         expected_header = f"{next_week_dt.strftime('%d %b')} ({next_week_dt.strftime('%a')}):"
         assert expected_header in calls_str
+
+
+class TestConfigReload:
+    """Tests for config reload functionality."""
+
+    def test_reload_settings_updates_settings(self, mock_settings):
+        """Test reload_settings updates the settings object."""
+        mock_settings.auto_reload_config = False
+        controller = MenuBarController(settings=mock_settings)
+
+        new_settings = MagicMock()
+        new_settings.auto_reload_config = False
+
+        with patch("club_calendar.menubar.app.get_settings", return_value=new_settings):
+            controller.reload_settings()
+
+        assert controller.settings == new_settings
+
+    def test_reload_settings_refreshes_service(self, mock_settings):
+        """Test reload_settings refreshes the service."""
+        mock_settings.auto_reload_config = False
+        controller = MenuBarController(settings=mock_settings)
+
+        new_settings = MagicMock()
+        new_settings.auto_reload_config = False
+
+        with patch("club_calendar.menubar.app.get_settings", return_value=new_settings):
+            with patch.object(controller, "_refresh_service") as mock_refresh:
+                controller.reload_settings()
+                mock_refresh.assert_called_once()
+
+    def test_config_watcher_not_started_when_disabled(self, mock_settings):
+        """Test file watcher is not started when auto_reload_config is False."""
+        mock_settings.auto_reload_config = False
+        controller = MenuBarController(settings=mock_settings)
+        assert controller._config_observer is None
+
+    def test_config_watcher_started_when_enabled(self, mock_settings):
+        """Test file watcher is started when auto_reload_config is True."""
+        mock_settings.auto_reload_config = True
+
+        with patch("club_calendar.menubar.app.get_config_file") as mock_get_file:
+            import tempfile
+            from pathlib import Path
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                config_path = Path(tmpdir) / "config.yaml"
+                config_path.touch()
+                mock_get_file.return_value = config_path
+
+                controller = MenuBarController(settings=mock_settings)
+
+                assert controller._config_observer is not None
+                # Clean up
+                controller._stop_config_watcher()
+
+    def test_stop_config_watcher(self, mock_settings):
+        """Test stopping the config watcher."""
+        mock_settings.auto_reload_config = True
+
+        with patch("club_calendar.menubar.app.get_config_file") as mock_get_file:
+            import tempfile
+            from pathlib import Path
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                config_path = Path(tmpdir) / "config.yaml"
+                config_path.touch()
+                mock_get_file.return_value = config_path
+
+                controller = MenuBarController(settings=mock_settings)
+                assert controller._config_observer is not None
+
+                controller._stop_config_watcher()
+                assert controller._config_observer is None
+
+    def test_reload_config_menu_item_exists(self, mock_rumps, mock_settings):
+        """Test that Reload config menu item exists in settings menu."""
+        mock_settings.sync_on_startup = False
+        mock_settings.auto_reload_config = False
+
+        controller = MenuBarController(settings=mock_settings)
+        app = create_app(rumps_module=mock_rumps, controller=controller)
+        app._update_menu()
+
+        # Find all menu item titles that were created
+        calls = [str(c) for c in mock_rumps.MenuItem.call_args_list]
+        calls_str = " ".join(calls)
+
+        assert "Reload config" in calls_str
