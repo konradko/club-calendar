@@ -51,5 +51,4 @@ packages/macos/tests/test-config/
 # macOS
 .DS_Store
 
-# Generated icons (from build-icons.sh)
-deploy/icon.png
+icon.pxd

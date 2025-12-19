@@ -33,7 +33,7 @@ oauth_callback_port: 51678
 # Logging
 debug: true  # Enable verbose logging
 log_output: "console"  # "console", "file", or "none"
-auto_reload_config: false  # Watch config file for changes
+auto_reload_config: true  # Watch config file for changes
 
 # City filter - auto-enable new clubs in these cities (empty = all)
 # Example:
