@@ -52,7 +52,7 @@ TEST_CONFIG_DIR = $(shell pwd)/tests/test-config
 
 # Generate fresh test config
 define create-test-config
-	@python tests/create_test_config.py
+	python tests/create_test_config.py
 endef
 # Run app with mock Strava server for e2e testing
 dev: icons

@@ -42,7 +42,13 @@ from club_calendar.core.strava import (
     StravaError,
     StravaRateLimitError,
 )
-from club_calendar.menubar.config import Settings, get_config_file, get_logs_dir, get_settings
+from club_calendar.menubar.config import (
+    ConfigError,
+    Settings,
+    get_config_file,
+    get_logs_dir,
+    get_settings,
+)
 from club_calendar.menubar.eventkit import CalendarError, sync_events_to_calendar
 from club_calendar.menubar.utils import (
     DayLabel,
@@ -92,13 +98,13 @@ def is_running_tests() -> bool:
 
 
 def show_dev_error(title: str, error: Exception, context: str = "") -> None:
-    """Show detailed error dialog in dev mode with stack trace.
+    """Log detailed error in dev mode with stack trace.
 
-    In dev mode, shows a blocking alert with full error details.
+    In dev mode, logs full error details to console.
     In production or during tests, does nothing (errors go through normal flow).
 
     Args:
-        title: Error dialog title
+        title: Error title for log message
         error: The exception that occurred
         context: Additional context about what was being attempted
     """
@@ -109,23 +115,7 @@ def show_dev_error(title: str, error: Exception, context: str = "") -> None:
     error_msg = str(error)
     stack = traceback.format_exc()
 
-    full_message = (
-        f"Type: {error_type}\nMessage: {error_msg}\n\nContext: {context}\n\nStack:\n{stack}"
-    )
     logger.error(f"DEV ERROR [{context}]: {error_type}: {error_msg}\n{stack}")
-
-    # Show blocking alert dialog
-    try:
-        import rumps
-
-        rumps.alert(title=f"Error: {title}", message=full_message[:2000])
-    except (ImportError, RuntimeError):
-        # Fallback: print to console
-        print(f"\n{'=' * 60}")
-        print(f"DEV ERROR: {title}")
-        print(f"{'=' * 60}")
-        print(full_message)
-        print(f"{'=' * 60}\n")
 
 
 def _categorize_error(error: Exception) -> str:
@@ -189,6 +179,10 @@ class MenuBarController:
         self._last_events: list[ClubEvent] = []
         self._config_observer: Observer | None = None
         self._menu_update_callback = menu_update_callback
+        self._config_valid: bool = True
+        self._config_error: str = ""
+        self._strava_auth_error: bool = False
+        self._has_errors: bool = False
         self._start_config_watcher()
 
     @property
@@ -269,7 +263,10 @@ class MenuBarController:
         """Check if app is fully configured and ready to sync.
 
         Only requires credentials and auth - clubs are auto-fetched on sync.
+        Also requires valid config file.
         """
+        if not self._config_valid:
+            return False
         return self.settings.has_strava_credentials() and self.settings.has_refresh_token()
 
     def validate_strava_access(self) -> tuple[bool, str]:
@@ -411,14 +408,24 @@ class MenuBarController:
         """Run the sync operation - fetches clubs, events, and syncs to Apple Calendar.
 
         Flow:
-        1. Reload settings from disk (pick up external edits)
-        2. Fetch and merge clubs from Strava
-        3. Fetch events from enabled clubs
-        4. Sync to Apple Calendar
+        1. Clear log file (prod mode only)
+        2. Reload settings from disk (pick up external edits)
+        3. Fetch and merge clubs from Strava
+        4. Fetch events from enabled clubs
+        5. Sync to Apple Calendar
 
         Returns:
             SyncResult with success status and message
         """
+        # Reset error states at start of sync
+        self._strava_auth_error = False
+        self._has_errors = False
+
+        # Clear log file at start of sync (logs show last sync only)
+        log_file = get_logs_dir() / "club_calendar.log"
+        if log_file.exists():
+            log_file.write_text("")
+
         logger.info("Starting sync...")
         try:
             # Reload settings to pick up external edits
@@ -444,8 +451,14 @@ class MenuBarController:
             # Sync to calendar
             return self._sync_to_calendar(events, fetch_errors)
 
+        except StravaAuthError as e:
+            logger.error(f"Strava auth error: {e}")
+            self._strava_auth_error = True
+            show_dev_error("Sync Failed", e, "Running calendar sync")
+            return SyncResult(success=False, message="Invalid Strava credentials")
         except (StravaError, httpx.HTTPError, CalendarError, OSError, ValueError) as e:
             logger.error(f"Sync error: {e}")
+            self._has_errors = True
             show_dev_error("Sync Failed", e, "Running calendar sync")
             return SyncResult(success=False, message=_categorize_error(e))
 
@@ -556,12 +569,45 @@ class MenuBarController:
     def reload_settings(self) -> None:
         """Reload settings from config file."""
         old_auto_reload = self.settings.auto_reload_config
-        self.settings = get_settings()
-        self._refresh_service()
+        try:
+            self.settings = get_settings()
+            self._config_valid = True
+            self._config_error = ""
+            self._refresh_service()
+        except ConfigError as e:
+            self._config_valid = False
+            self._config_error = str(e)
+            logger.error(f"Config reload failed: {e}")
+            return  # Don't restart watcher or refresh service
+
         # Restart watcher if setting changed
         if self.settings.auto_reload_config != old_auto_reload:
             self._stop_config_watcher()
             self._start_config_watcher()
+
+    def is_config_valid(self) -> bool:
+        """Check if config file is valid."""
+        return self._config_valid
+
+    def get_config_error(self) -> str:
+        """Get config error message if invalid."""
+        return self._config_error
+
+    def has_strava_auth_error(self) -> bool:
+        """Check if there's a Strava authentication error."""
+        return self._strava_auth_error
+
+    def clear_strava_auth_error(self) -> None:
+        """Clear Strava auth error state (called after config edit)."""
+        self._strava_auth_error = False
+
+    def has_errors(self) -> bool:
+        """Check if there are unhandled errors logged."""
+        return self._has_errors
+
+    def clear_errors(self) -> None:
+        """Clear error state (called after viewing logs)."""
+        self._has_errors = False
 
     def _start_config_watcher(self) -> None:
         """Start file watcher if auto_reload_config is enabled."""
@@ -771,6 +817,20 @@ class MenuBarController:
     def get_sync_interval(self) -> int:
         """Get the current sync interval in minutes."""
         return self.settings.sync_interval_minutes
+
+    def set_debug(self, enabled: bool) -> SetupResult:
+        """Set debug mode (verbose logging)."""
+        try:
+            self.settings.debug = enabled
+            self.settings.save()
+            # Reconfigure logging
+            from club_calendar.menubar.logging_config import configure_logging
+
+            configure_logging(self.settings)
+            return SetupResult(success=True, message=f"Debug mode: {'on' if enabled else 'off'}")
+        except (OSError, yaml.YAMLError, PermissionError) as e:
+            show_dev_error("Set Debug", e, "Saving debug setting")
+            return SetupResult(success=False, message=str(e)[:100])
 
     def should_auto_sync(self) -> bool:
         """Check if enough time has passed for auto-sync."""
@@ -1218,6 +1278,10 @@ def create_app(rumps_module=None, controller=None):
             login_item.state = self.controller.is_login_enabled()
             settings_menu.add(login_item)
 
+            debug_item = rumps.MenuItem("Debug mode", callback=self.toggle_debug)
+            debug_item.state = self.controller.settings.debug
+            settings_menu.add(debug_item)
+
             settings_menu.add(rumps.separator)
             settings_menu.add(rumps.MenuItem("Edit config...", callback=self.edit_config))
             settings_menu.add(rumps.MenuItem("Reload config", callback=self.reload_config))
@@ -1228,6 +1292,23 @@ def create_app(rumps_module=None, controller=None):
         def _update_menu(self) -> None:
             """Update menu items based on current state."""
             self.menu.clear()
+
+            # Show warning states at top of menu
+            if not self.controller.is_config_valid():
+                self.menu.add(rumps.MenuItem("⚠️ Invalid config", callback=self.edit_config))
+                self.menu.add(rumps.separator)
+                self.menu.add(rumps.MenuItem("Quit", callback=self.quit_app))
+                return
+
+            if self.controller.has_strava_auth_error():
+                self.menu.add(
+                    rumps.MenuItem("⚠️ Invalid Strava credentials", callback=self.edit_config)
+                )
+                self.menu.add(rumps.separator)
+
+            if self.controller.has_errors():
+                self.menu.add(rumps.MenuItem("⚠️ Errors", callback=self.view_logs))
+                self.menu.add(rumps.separator)
 
             if self.controller.is_ready():
                 # Upcoming events grouped by day
@@ -1371,6 +1452,7 @@ def create_app(rumps_module=None, controller=None):
 
         def edit_config(self, _) -> None:
             """Open config file in default editor."""
+            self.controller.clear_strava_auth_error()
             self.controller.open_config_file()
 
         def toggle_login(self, sender) -> None:
@@ -1379,6 +1461,12 @@ def create_app(rumps_module=None, controller=None):
                 self.controller.disable_login()
             else:
                 self.controller.enable_login()
+            self._update_menu()
+            # Silent - menu checkmark shows state
+
+        def toggle_debug(self, sender) -> None:
+            """Toggle debug mode (verbose logging)."""
+            self.controller.set_debug(not self.controller.settings.debug)
             self._update_menu()
             # Silent - menu checkmark shows state
 
@@ -1395,8 +1483,10 @@ def create_app(rumps_module=None, controller=None):
             notify(title="Club Calendar", subtitle="Config reloaded", message="")
 
         def view_logs(self, _) -> None:
-            """Open log file."""
+            """Open log file and clear error state."""
+            self.controller.clear_errors()
             self.controller.view_logs()
+            self._update_menu()
 
         def quit_app(self, _) -> None:
             """Quit the application."""

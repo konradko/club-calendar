@@ -10,6 +10,13 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+
+class ConfigError(Exception):
+    """Raised when config file is invalid or cannot be parsed."""
+
+    pass
+
+
 # Config schema version - bump when adding new fields or changing structure
 # Comment/example changes don't require version bump (will update on next save)
 CURRENT_SCHEMA_VERSION = 4
@@ -96,7 +103,7 @@ class Settings:
     log_output: str = "none"  # "console", "file", or "none"
 
     # Auto-reload config on file change
-    auto_reload_config: bool = False
+    auto_reload_config: bool = True
 
     # Flooding prevention
     max_events_per_club_per_week: int = 10  # Max events per club per week (0 = unlimited)
@@ -247,6 +254,17 @@ auto_reload_config: {str(self.auto_reload_config).lower()}  # Watch config file 
 
 {clubs_block}
 """
+        # Add URL overrides section if any are set (for testing with mock server)
+        url_overrides = []
+        if self.strava_api_url:
+            url_overrides.append(f"strava_api_url: {self.strava_api_url}")
+        if self.strava_token_url:
+            url_overrides.append(f"strava_token_url: {self.strava_token_url}")
+        if self.strava_auth_url:
+            url_overrides.append(f"strava_auth_url: {self.strava_auth_url}")
+        if url_overrides:
+            content += "\n# URL overrides (for testing)\n" + "\n".join(url_overrides) + "\n"
+
         get_config_file().write_text(content)
 
     @classmethod
@@ -265,19 +283,8 @@ auto_reload_config: {str(self.auto_reload_config).lower()}  # Watch config file 
             else:
                 try:
                     config = yaml.safe_load(content) or {}
-                except yaml.YAMLError:
-                    # Corrupted config - comment it out and create fresh
-                    logger.warning("Config file corrupted, creating fresh config")
-                    commented = "\n".join(f"# {line}" for line in content.splitlines())
-                    header = "# === CORRUPTED CONFIG (commented out) ===\n"
-                    footer = "\n# === END CORRUPTED CONFIG ===\n\n"
-                    # Create fresh settings, save with corrupted content preserved
-                    fresh = cls()
-                    fresh.save()
-                    # Prepend corrupted content to saved file
-                    new_content = header + commented + footer + config_file.read_text()
-                    config_file.write_text(new_content)
-                    config = {}
+                except yaml.YAMLError as e:
+                    raise ConfigError(f"Invalid YAML in config file: {e}") from e
 
         # Get values from config file
         strava_client_id = config.get("strava_client_id", "")

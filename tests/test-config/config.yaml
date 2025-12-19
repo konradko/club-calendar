@@ -11,7 +11,7 @@
 # After authentication, click "Sync Now" to fetch your clubs.
 # New clubs matching your cities filter are auto-enabled.
 
-schema_version: 2
+schema_version: 4
 
 strava_client_id: mock_client_id
 strava_client_secret: mock_client_secret
@@ -30,6 +30,11 @@ calendar_name: "Test Club Calendar"
 # OAuth callback port (49152-65535 range recommended)
 oauth_callback_port: 51678
 
+# Logging
+debug: true  # Enable verbose logging
+log_output: "console"  # "console", "file", or "none"
+auto_reload_config: false  # Watch config file for changes
+
 # City filter - auto-enable new clubs in these cities (empty = all)
 # Example:
 #   cities:
@@ -37,12 +42,25 @@ oauth_callback_port: 51678
 #     - Manchester
 cities: []
 
-# Clubs - populated after first sync
-# You can manually enable/disable clubs here
-# Example:
-#   clubs:
-#     123456:
-#       name: Morning Runners
-#       city: London
-#       enabled: true
-clubs: {}
+clubs:
+  1000:
+    name: "Cyclists"
+    city: "London"
+    enabled: true
+  1001:
+    name: "Runners"
+    city: "London"
+    enabled: true
+  1002:
+    name: "Swimmers"
+    city: "London"
+    enabled: true
+  1003:
+    name: "Hikers"
+    city: "London"
+    enabled: true
+
+# URL overrides (for testing)
+strava_api_url: http://localhost:51679/api/v3
+strava_token_url: http://localhost:51679/oauth/token
+strava_auth_url: http://localhost:51679/oauth/authorize
