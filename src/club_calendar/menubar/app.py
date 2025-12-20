@@ -203,6 +203,9 @@ class MenuBarController:
         self._config_error: str = ""
         self._strava_auth_error: bool = False
         self._has_errors: bool = False
+        self._last_error_message: str = ""  # Track last error for menu display
+        self._is_first_launch: bool = not get_config_file().exists()
+        self._pending_oauth: bool = False  # Track if OAuth should auto-start
         self._start_config_watcher()
 
     @property
@@ -336,24 +339,6 @@ class MenuBarController:
             show_dev_error("Calendar Access", e, "Requesting calendar access")
             return False, f"Calendar error: {error_msg}"
 
-    def validate_all(self) -> list[tuple[str, bool, str]]:
-        """Validate all connections before sync.
-
-        Returns:
-            List of (check_name, success, message) tuples
-        """
-        results = []
-
-        # Check Strava
-        strava_ok, strava_msg = self.validate_strava_access()
-        results.append(("Strava", strava_ok, strava_msg))
-
-        # Check Calendar
-        calendar_ok, calendar_msg = self.validate_calendar_access()
-        results.append(("Calendar", calendar_ok, calendar_msg))
-
-        return results
-
     def _sync_clubs(self) -> None:
         """Fetch clubs from Strava and merge with config.
 
@@ -474,13 +459,16 @@ class MenuBarController:
         except StravaAuthError as e:
             logger.error(f"Strava auth error: {e}")
             self._strava_auth_error = True
+            self._last_error_message = "Invalid Strava credentials"
             show_dev_error("Sync Failed", e, "Running calendar sync")
             return SyncResult(success=False, message="Invalid Strava credentials")
         except (StravaError, httpx.HTTPError, CalendarError, OSError, ValueError) as e:
             logger.error(f"Sync error: {e}")
             self._has_errors = True
+            error_msg = _categorize_error(e)
+            self._last_error_message = error_msg
             show_dev_error("Sync Failed", e, "Running calendar sync")
-            return SyncResult(success=False, message=_categorize_error(e))
+            return SyncResult(success=False, message=error_msg)
 
     def _filter_events(self, events: list[ClubEvent]) -> list[ClubEvent]:
         """Apply flooding prevention filters.
@@ -587,8 +575,13 @@ class MenuBarController:
         subprocess.run(["open", str(log_file)])
 
     def reload_settings(self) -> None:
-        """Reload settings from config file."""
+        """Reload settings from config file.
+
+        Also detects when credentials were just added and sets pending OAuth flag.
+        """
         old_auto_reload = self.settings.auto_reload_config
+        had_credentials = self.settings.has_strava_credentials()
+
         try:
             self.settings = get_settings()
             self._config_valid = True
@@ -601,6 +594,15 @@ class MenuBarController:
             self._config_error = str(e)
             logger.error(f"Config reload failed: {e}")
             return  # Don't restart watcher or refresh service
+
+        # Detect if credentials were just added and we need OAuth
+        if (
+            not had_credentials
+            and self.settings.has_strava_credentials()
+            and not self.settings.has_refresh_token()
+        ):
+            self._pending_oauth = True
+            logger.info("Credentials added, OAuth pending")
 
         # Restart watcher if setting changed
         if self.settings.auto_reload_config != old_auto_reload:
@@ -627,9 +629,30 @@ class MenuBarController:
         """Check if there are unhandled errors logged."""
         return self._has_errors
 
+    def get_last_error(self) -> str:
+        """Get the last error message for display."""
+        return self._last_error_message
+
     def clear_errors(self) -> None:
         """Clear error state (called after viewing logs)."""
         self._has_errors = False
+        self._last_error_message = ""
+
+    def is_first_launch(self) -> bool:
+        """Check if this is the first launch (no config exists yet)."""
+        return self._is_first_launch
+
+    def mark_launched(self) -> None:
+        """Mark that first launch has been handled."""
+        self._is_first_launch = False
+
+    def should_auto_start_oauth(self) -> bool:
+        """Check if OAuth should auto-start after credentials were added."""
+        return self._pending_oauth
+
+    def clear_pending_oauth(self) -> None:
+        """Clear the pending OAuth flag."""
+        self._pending_oauth = False
 
     def _start_config_watcher(self) -> None:
         """Start file watcher if auto_reload_config is enabled."""
@@ -1024,6 +1047,15 @@ def create_app(rumps_module=None, controller=None):
             self.controller._menu_update_callback = self._update_menu_on_main_thread
             self._update_menu()
 
+            # Show first-launch welcome notification
+            if self.controller.is_first_launch():
+                self.controller.mark_launched()
+                notify(
+                    title="Club Calendar",
+                    subtitle="Welcome!",
+                    message="Click the menu bar icon to set up your Strava connection.",
+                )
+
             # Auto-sync on startup if ready and enabled
             if self.controller.is_ready() and self.controller.settings.sync_on_startup:
                 self._sync_on_startup()
@@ -1300,6 +1332,12 @@ def create_app(rumps_module=None, controller=None):
             """Update menu items based on current state."""
             self.menu.clear()
 
+            # Check if OAuth should auto-start (credentials were just added via config file)
+            if self.controller.should_auto_start_oauth():
+                self.controller.clear_pending_oauth()
+                # Schedule OAuth in background to not block menu update
+                Thread(target=self._auto_start_oauth, daemon=True).start()
+
             # Show warning states at top of menu
             if not self.controller.is_config_valid():
                 self.menu.add(rumps.MenuItem("⚠️ Invalid config", callback=self.edit_config))
@@ -1314,7 +1352,11 @@ def create_app(rumps_module=None, controller=None):
                 self.menu.add(rumps.separator)
 
             if self.controller.has_errors():
-                self.menu.add(rumps.MenuItem("⚠️ Errors", callback=self.view_logs))
+                # Show actual error message (truncated for menu)
+                error_msg = self.controller.get_last_error()
+                if len(error_msg) > 40:
+                    error_msg = error_msg[:37] + "..."
+                self.menu.add(rumps.MenuItem(f"⚠️ {error_msg}", callback=self.view_logs))
                 self.menu.add(rumps.separator)
 
             if self.controller.is_ready():
@@ -1438,6 +1480,41 @@ def create_app(rumps_module=None, controller=None):
 
             Thread(target=do_auto_sync, daemon=True).start()
 
+        def _auto_start_oauth(self) -> None:
+            """Auto-start OAuth when credentials are detected.
+
+            Called from _update_menu when credentials were just added to config.
+            """
+            notify(
+                title="Club Calendar",
+                subtitle="Credentials detected!",
+                message="Starting Strava authentication...",
+            )
+            # Small delay to let notification show
+            time.sleep(0.5)
+            self._run_oauth_flow()
+
+        def _run_oauth_flow(self) -> None:
+            """Common OAuth flow logic used by run_auth and auto-start."""
+            # Start OAuth flow
+            result = self.controller.start_oauth_flow()
+            if not result.success:
+                notify("Club Calendar", "Error", result.message)
+                return
+
+            # Run OAuth server (blocking)
+            oauth_result = run_oauth_server(self.controller)
+            self._update_menu_on_main_thread()
+
+            if oauth_result.success:
+                notify(
+                    title="Club Calendar",
+                    subtitle="Authentication successful!",
+                    message="Click 'Sync now' to fetch your club events.",
+                )
+            else:
+                notify("Club Calendar", "Authentication Failed", oauth_result.message)
+
         def run_auth(self, _) -> None:
             """Run OAuth authentication flow."""
             if not self.controller.settings.has_strava_credentials():
@@ -1448,21 +1525,8 @@ def create_app(rumps_module=None, controller=None):
                 )
                 return
 
-            # Start OAuth flow
-            result = self.controller.start_oauth_flow()
-            if not result.success:
-                notify("Club Calendar", "Error", result.message)
-                return
-
-            # Run OAuth server in background thread
-            def handle_oauth():
-                oauth_result = run_oauth_server(self.controller)
-                self._update_menu()
-                # Only notify on error - success is visible in menu
-                if not oauth_result.success:
-                    notify("Club Calendar", "Authentication Failed", oauth_result.message)
-
-            Thread(target=handle_oauth, daemon=True).start()
+            # Run OAuth in background thread
+            Thread(target=self._run_oauth_flow, daemon=True).start()
 
         def open_event(self, event) -> None:
             """Open event in Apple Calendar."""
