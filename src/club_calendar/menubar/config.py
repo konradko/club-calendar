@@ -100,7 +100,7 @@ class Settings:
 
     # Logging
     debug: bool = False  # Enable verbose logging (INFO level)
-    log_output: str = "none"  # "console", "file", or "none"
+    log_output: str = "file"  # "console", "file", or "none"
 
     # Auto-reload config on file change
     auto_reload_config: bool = True

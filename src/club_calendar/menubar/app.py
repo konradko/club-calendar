@@ -10,7 +10,7 @@ import webbrowser
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Lock, Thread, current_thread
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
@@ -64,18 +64,31 @@ logger = logging.getLogger(__name__)
 
 
 def setup_logging(settings: Settings) -> None:
-    """Configure logging based on settings."""
+    """Configure logging based on settings.
+
+    Can be called multiple times safely (e.g., on config reload).
+    Cleans up existing handlers before adding new ones.
+    """
+    root = logging.getLogger()
+
+    # Remove existing handlers to prevent duplicates on reconfiguration
+    for handler in root.handlers[:]:
+        handler.close()
+        root.removeHandler(handler)
+
+    # Re-enable logging (in case it was disabled previously)
+    logging.disable(logging.NOTSET)
+
     if settings.log_output == "none":
         logging.disable(logging.CRITICAL)
         return
 
     level = logging.INFO if settings.debug else logging.WARNING
     formatter = logging.Formatter(LOG_FORMAT, LOG_DATEFMT)
-    root = logging.getLogger()
     root.setLevel(level)
 
     if settings.log_output == "file":
-        handler = logging.FileHandler(get_logs_dir() / "club-calendar.log")
+        handler: logging.Handler = logging.FileHandler(get_logs_dir() / "club-calendar.log")
     elif settings.log_output == "console":
         handler = logging.StreamHandler()
     else:
@@ -574,6 +587,8 @@ class MenuBarController:
             self._config_valid = True
             self._config_error = ""
             self._refresh_service()
+            # Reconfigure logging in case log_output or debug changed
+            setup_logging(self.settings)
         except ConfigError as e:
             self._config_valid = False
             self._config_error = str(e)
@@ -661,7 +676,10 @@ class MenuBarController:
         """Stop file watcher if running."""
         if self._config_observer is not None:
             self._config_observer.stop()
-            self._config_observer.join(timeout=1.0)
+            # Don't join if called from within the watcher thread itself
+            # (e.g., during reload_settings triggered by file change)
+            if current_thread() is not self._config_observer:
+                self._config_observer.join(timeout=1.0)
             self._config_observer = None
             logger.info("Stopped config file watcher")
 
@@ -817,20 +835,6 @@ class MenuBarController:
     def get_sync_interval(self) -> int:
         """Get the current sync interval in minutes."""
         return self.settings.sync_interval_minutes
-
-    def set_debug(self, enabled: bool) -> SetupResult:
-        """Set debug mode (verbose logging)."""
-        try:
-            self.settings.debug = enabled
-            self.settings.save()
-            # Reconfigure logging
-            from club_calendar.menubar.logging_config import configure_logging
-
-            configure_logging(self.settings)
-            return SetupResult(success=True, message=f"Debug mode: {'on' if enabled else 'off'}")
-        except (OSError, yaml.YAMLError, PermissionError) as e:
-            show_dev_error("Set Debug", e, "Saving debug setting")
-            return SetupResult(success=False, message=str(e)[:100])
 
     def should_auto_sync(self) -> bool:
         """Check if enough time has passed for auto-sync."""
@@ -1278,10 +1282,6 @@ def create_app(rumps_module=None, controller=None):
             login_item.state = self.controller.is_login_enabled()
             settings_menu.add(login_item)
 
-            debug_item = rumps.MenuItem("Debug mode", callback=self.toggle_debug)
-            debug_item.state = self.controller.settings.debug
-            settings_menu.add(debug_item)
-
             settings_menu.add(rumps.separator)
             settings_menu.add(rumps.MenuItem("Edit config...", callback=self.edit_config))
             settings_menu.add(rumps.MenuItem("Reload config", callback=self.reload_config))
@@ -1461,12 +1461,6 @@ def create_app(rumps_module=None, controller=None):
                 self.controller.disable_login()
             else:
                 self.controller.enable_login()
-            self._update_menu()
-            # Silent - menu checkmark shows state
-
-        def toggle_debug(self, sender) -> None:
-            """Toggle debug mode (verbose logging)."""
-            self.controller.set_debug(not self.controller.settings.debug)
             self._update_menu()
             # Silent - menu checkmark shows state
 
