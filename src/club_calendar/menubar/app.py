@@ -1,6 +1,7 @@
 """macOS menu bar app for Club Calendar."""
 
 import logging
+import platform
 import plistlib
 import subprocess
 import sys
@@ -13,6 +14,12 @@ from pathlib import Path
 from threading import Lock, Thread, current_thread
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
+
+# Check platform early - this app is macOS only
+if platform.system() != "Darwin":
+    print("Error: Club Calendar menu bar app requires macOS.")
+    print("This app uses macOS-specific features (menu bar, EventKit, etc.)")
+    sys.exit(1)
 
 if TYPE_CHECKING:
     from watchdog.observers import Observer
@@ -435,7 +442,7 @@ class MenuBarController:
         self._has_errors = False
 
         # Clear log file at start of sync (logs show last sync only)
-        log_file = get_logs_dir() / "club_calendar.log"
+        log_file = get_logs_dir() / "club-calendar.log"
         if log_file.exists():
             log_file.write_text("")
 
@@ -1322,12 +1329,23 @@ def create_app(rumps_module=None, controller=None):
                 # Settings submenu
                 self.menu.add(self._build_settings_menu())
             elif not self.controller.settings.has_strava_credentials():
-                # Step 1: Need credentials - click opens config
+                # Step 1: Need credentials - provide guided setup
+                self.menu.add(rumps.MenuItem("Setup Required", callback=None))
+                self.menu.add(rumps.separator)
                 self.menu.add(
-                    rumps.MenuItem("Set Strava credentials...", callback=self.edit_config)
+                    rumps.MenuItem(
+                        "1. Open Strava API Settings...", callback=self.open_strava_api_page
+                    )
+                )
+                self.menu.add(
+                    rumps.MenuItem(
+                        "2. Add credentials to config...", callback=self.edit_config
+                    )
                 )
             else:
                 # Step 2: Have credentials, need auth - click starts OAuth
+                self.menu.add(rumps.MenuItem("Credentials configured ✓", callback=None))
+                self.menu.add(rumps.separator)
                 self.menu.add(rumps.MenuItem("Authenticate with Strava...", callback=self.run_auth))
                 self.menu.add(rumps.separator)
                 self.menu.add(rumps.MenuItem("Edit config...", callback=self.edit_config))
@@ -1454,6 +1472,10 @@ def create_app(rumps_module=None, controller=None):
             """Open config file in default editor."""
             self.controller.clear_strava_auth_error()
             self.controller.open_config_file()
+
+        def open_strava_api_page(self, _) -> None:
+            """Open Strava API settings page in browser."""
+            webbrowser.open("https://www.strava.com/settings/api")
 
         def toggle_login(self, sender) -> None:
             """Toggle start at login setting."""

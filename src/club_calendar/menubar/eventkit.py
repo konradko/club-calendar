@@ -11,6 +11,15 @@ from club_calendar.menubar.utils import get_activity_emoji
 logger = logging.getLogger(__name__)
 
 
+def _build_event_title(club_event: ClubEvent) -> str:
+    """Build calendar event title with emoji and club name prefix.
+
+    Format: "🚴 ClubName: Event Title"
+    """
+    emoji = get_activity_emoji(club_event.activity_type)
+    return f"{emoji} {club_event.club_name}: {club_event.title}"
+
+
 class CalendarError(Exception):
     """Base exception for calendar operations."""
 
@@ -31,15 +40,15 @@ def _import_eventkit():
         return None
 
 
-def _get_event_store():
-    """Get EventKit event store with calendar access."""
-    EventKit = _import_eventkit()  # noqa: N806
-    if not EventKit:
-        return None, "EventKit not available"
+def _request_event_store_access(store) -> tuple[bool, str | None]:
+    """Request calendar access from user.
 
-    store = EventKit.EKEventStore.alloc().init()
+    Args:
+        store: EKEventStore instance
 
-    # Request calendar access (will prompt user if needed)
+    Returns:
+        Tuple of (granted, error_message)
+    """
     result = {"granted": False, "error": None}
     done = threading.Event()
 
@@ -52,8 +61,23 @@ def _get_event_store():
     store.requestFullAccessToEventsWithCompletion_(completion_handler)
     done.wait(timeout=30)
 
-    if not result["granted"]:
-        error_msg = result["error"] or "Calendar access denied"
+    error_msg = result["error"] if not result["granted"] else None
+    if not result["granted"] and not error_msg:
+        error_msg = "Calendar access denied"
+
+    return result["granted"], error_msg
+
+
+def _get_event_store():
+    """Get EventKit event store with calendar access."""
+    EventKit = _import_eventkit()  # noqa: N806
+    if not EventKit:
+        return None, "EventKit not available"
+
+    store = EventKit.EKEventStore.alloc().init()
+    granted, error_msg = _request_event_store_access(store)
+
+    if not granted:
         return None, error_msg
 
     return store, None
@@ -129,10 +153,8 @@ def _create_event(store, calendar, club_event: ClubEvent):
     event = EventKit.EKEvent.eventWithEventStore_(store)
     event.setCalendar_(calendar)
 
-    # Title with emoji and club name prefix: "🚴 ClubName: Event Title"
-    emoji = get_activity_emoji(club_event.activity_type)
-    title = f"{emoji} {club_event.club_name}: {club_event.title}"
-    event.setTitle_(title)
+    # Title with emoji and club name prefix
+    event.setTitle_(_build_event_title(club_event))
 
     # Set start and end time (2 hour default duration)
     start_date = club_event.start_datetime
@@ -343,14 +365,10 @@ def sync_events_to_calendar(
 
 def _update_event(event, club_event: ClubEvent):
     """Update an existing EventKit event from a ClubEvent."""
-    from datetime import timedelta
-
     from Foundation import NSDate, NSTimeZone
 
-    # Title with emoji and club name prefix: "🚴 ClubName: Event Title"
-    emoji = get_activity_emoji(club_event.activity_type)
-    title = f"{emoji} {club_event.club_name}: {club_event.title}"
-    event.setTitle_(title)
+    # Title with emoji and club name prefix
+    event.setTitle_(_build_event_title(club_event))
 
     # Update times
     start_date = club_event.start_datetime
@@ -382,25 +400,6 @@ def request_calendar_access() -> tuple[bool, str]:
         return False, "EventKit not available"
 
     store = EventKit.EKEventStore.alloc().init()
+    granted, error_msg = _request_event_store_access(store)
 
-    # For macOS 10.14+, we need to request full access
-    # This will show a system prompt to the user
-    result = {"granted": False, "error": None}
-    done = threading.Event()
-
-    def completion_handler(granted, error):
-        result["granted"] = granted
-        if error:
-            result["error"] = str(error)
-        done.set()
-
-    # Request access
-    store.requestFullAccessToEventsWithCompletion_(completion_handler)
-
-    # Wait for response (with timeout)
-    done.wait(timeout=30)
-
-    if result["error"]:
-        return False, result["error"]
-
-    return result["granted"], "" if result["granted"] else "Calendar access denied"
+    return granted, error_msg or ""

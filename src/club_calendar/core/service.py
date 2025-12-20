@@ -2,7 +2,6 @@
 
 import json
 import logging
-from collections import Counter
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Thread
@@ -40,36 +39,6 @@ class OAuthResult:
     success: bool
     message: str
     refresh_token: str | None = None
-
-
-def filter_local_clubs(
-    clubs: list[Club],
-    cities: list[str] | None = None,
-    max_members: int = 100000,
-) -> tuple[list[Club], list[str]]:
-    """Filter clubs to local ones based on city.
-
-    This is a pure function - no side effects, no dependencies.
-
-    Args:
-        clubs: List of all clubs
-        cities: Explicit city filter, or None to auto-detect from most common
-        max_members: Maximum member count (filters out mega-clubs)
-
-    Returns:
-        Tuple of (filtered clubs, cities used for filtering)
-    """
-    # Auto-detect most common city if not specified
-    if not cities:
-        all_cities = [c.city for c in clubs if c.city]
-        if all_cities:
-            cities = [Counter(all_cities).most_common(1)[0][0]]
-        else:
-            cities = []
-
-    # Filter by city and member count
-    local = [c for c in clubs if c.city in cities and c.member_count < max_members]
-    return local, cities
 
 
 class ClubCalendarService:

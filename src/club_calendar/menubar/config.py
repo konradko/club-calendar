@@ -321,10 +321,10 @@ auto_reload_config: {str(self.auto_reload_config).lower()}  # Watch config file 
         calendar_name = config.get("calendar_name", "Club Calendar")
         oauth_callback_port = config.get("oauth_callback_port", 51678)
 
-        # Logging
+        # Logging (defaults must match dataclass defaults)
         debug = config.get("debug", False)
-        log_output = config.get("log_output", "none")
-        auto_reload_config = config.get("auto_reload_config", False)
+        log_output = config.get("log_output", "file")  # Default: file logging enabled
+        auto_reload_config = config.get("auto_reload_config", True)  # Default: watch for changes
 
         # Strava API URLs (for mock server testing)
         strava_api_url = config.get("strava_api_url", "")
