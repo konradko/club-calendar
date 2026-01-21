@@ -332,7 +332,7 @@ class TestMenuBarController:
         from club_calendar.menubar.eventkit import SyncResult as EventKitSyncResult
 
         # Setup settings with merge_clubs mock
-        mock_settings.merge_clubs.return_value = 0  # No new clubs
+        mock_settings.merge_clubs.return_value = 1  # New clubs found
 
         controller = MenuBarController(settings=mock_settings)
 
@@ -437,7 +437,7 @@ class TestMenuBarController:
             "456": {"name": "Disabled Club", "city": "Seattle", "enabled": False},
         }
         mock_settings.get_club_ids.return_value = [123]  # Only enabled club
-        mock_settings.merge_clubs.return_value = 0
+        mock_settings.merge_clubs.return_value = 1  # New club found
 
         controller = MenuBarController(settings=mock_settings)
 

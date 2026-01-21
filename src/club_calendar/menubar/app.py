@@ -365,8 +365,7 @@ class MenuBarController:
         )
         if new_clubs > 0:
             logger.info(f"Added {new_clubs} new clubs to config")
-
-        self.settings.save()
+            self.settings.save()
 
     def _sync_events(
         self, club_ids: list[int]
@@ -1332,6 +1331,10 @@ def create_app(rumps_module=None, controller=None):
                 # Upcoming events grouped by day
                 max_events = self.controller.settings.max_menu_events
                 self._build_events_section(max_events)
+
+                # Last sync status (muted/gray, non-clickable)
+                status_text = self.controller.get_status_text()
+                self.menu.add(self._create_muted_menu_item(status_text, None))
 
                 # Main actions
                 self.menu.add(rumps.MenuItem("Sync now", callback=self.sync_now))
