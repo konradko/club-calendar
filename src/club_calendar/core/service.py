@@ -104,6 +104,7 @@ class ClubCalendarService:
         self._api_url = api_url
         self._token_url = token_url
         self._auth_url = auth_url
+        self._client: StravaClient | None = None
 
     @property
     def refresh_token(self) -> str | None:
@@ -112,11 +113,21 @@ class ClubCalendarService:
 
     @refresh_token.setter
     def refresh_token(self, value: str | None) -> None:
-        """Set the refresh token."""
+        """Set the refresh token and invalidate cached client."""
+        if value != self._refresh_token:
+            self._close_client()
         self._refresh_token = value
 
-    def _create_client(self, require_token: bool = True) -> StravaClient:
-        """Create a Strava client instance.
+    def _close_client(self) -> None:
+        """Close and clear the cached client."""
+        if self._client is not None:
+            self._client.close()
+            self._client = None
+
+    def _get_client(self, require_token: bool = True) -> StravaClient:
+        """Get or create a cached Strava client instance.
+
+        Reuses the same client to preserve token caching across API calls.
 
         Args:
             require_token: Whether refresh token is required
@@ -126,6 +137,33 @@ class ClubCalendarService:
 
         Raises:
             ValueError: If token required but not set
+        """
+        token = self.refresh_token
+        if require_token and not token:
+            raise ValueError("Refresh token required but not set")
+
+        if self._client is None:
+            self._client = StravaClient(
+                client_id=self.client_id,
+                client_secret=self.client_secret,
+                refresh_token=token,
+                api_url=self._api_url,
+                token_url=self._token_url,
+                auth_url=self._auth_url,
+            )
+        return self._client
+
+    def _create_client(self, require_token: bool = True) -> StravaClient:
+        """Create a new temporary Strava client (for OAuth operations).
+
+        Unlike _get_client(), this creates a fresh client each time.
+        Used for OAuth operations that don't need token caching.
+
+        Args:
+            require_token: Whether refresh token is required
+
+        Returns:
+            New StravaClient instance (caller must close it)
         """
         token = self.refresh_token
         if require_token and not token:
@@ -308,8 +346,7 @@ class ClubCalendarService:
         Raises:
             StravaError: On API errors
         """
-        with self._create_client() as client:
-            return client.get_athlete_clubs()
+        return self._get_client().get_athlete_clubs()
 
     # =========================================================================
     # Event Operations
@@ -331,5 +368,4 @@ class ClubCalendarService:
         Raises:
             StravaAuthError: On authentication errors (fails entire operation)
         """
-        with self._create_client() as client:
-            return client.get_all_club_events(club_ids)
+        return self._get_client().get_all_club_events(club_ids)

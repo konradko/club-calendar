@@ -99,7 +99,7 @@ class Settings:
     oauth_callback_port: int = 51678
 
     # Logging
-    debug: bool = False  # Enable verbose logging (INFO level)
+    debug: bool = False  # Enable verbose logging (DEBUG level)
     log_output: str = "both"  # "console", "file", "both", or "none"
 
     # Auto-reload config on file change

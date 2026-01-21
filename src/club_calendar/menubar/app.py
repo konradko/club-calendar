@@ -83,7 +83,7 @@ def setup_logging(settings: Settings) -> None:
         logging.disable(logging.CRITICAL)
         return
 
-    level = logging.INFO if settings.debug else logging.WARNING
+    level = logging.DEBUG if settings.debug else logging.INFO
     formatter = logging.Formatter(LOG_FORMAT, LOG_DATEFMT)
     root.setLevel(level)
 
@@ -191,6 +191,7 @@ class MenuBarController:
         self.settings = settings or get_settings()
         self._service = service
         self._lock = Lock()
+        self._sync_lock = Lock()  # Prevent concurrent syncs
         self._last_sync: datetime | None = None
         self._last_events: list[ClubEvent] = []
         self._config_observer: Observer | None = None
@@ -433,6 +434,18 @@ class MenuBarController:
         Returns:
             SyncResult with success status and message
         """
+        # Prevent concurrent syncs
+        if not self._sync_lock.acquire(blocking=False):
+            logger.info("Sync already in progress, skipping")
+            return SyncResult(success=True, message="Sync already in progress")
+
+        try:
+            return self._do_sync()
+        finally:
+            self._sync_lock.release()
+
+    def _do_sync(self) -> SyncResult:
+        """Internal sync implementation (must hold _sync_lock)."""
         # Reset error states at start of sync
         self._strava_auth_error = False
         self._has_errors = False
@@ -845,6 +858,8 @@ class MenuBarController:
             return False
         if self.settings.sync_interval_minutes == 0:
             return False  # Auto-sync disabled
+        if self._sync_lock.locked():
+            return False  # Sync already in progress
         if self.last_sync is None:
             return True
         elapsed = (datetime.now() - self.last_sync).total_seconds() / 60
