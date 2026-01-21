@@ -62,6 +62,60 @@ class TestClubCalendarService:
         with pytest.raises(ValueError, match="Refresh token required"):
             service.get_club_events([123])
 
+    def test_client_caching_reuses_same_instance(self):
+        """Test _get_client returns the same cached client instance."""
+        service = ClubCalendarService(
+            client_id="test_id",
+            client_secret="test_secret",
+            refresh_token="test_token",
+        )
+
+        client1 = service._get_client()
+        client2 = service._get_client()
+        assert client1 is client2  # Same instance
+
+        # Cleanup
+        service._close_client()
+
+    def test_client_invalidated_on_token_change(self):
+        """Test cached client is closed and cleared when refresh_token changes."""
+        service = ClubCalendarService(
+            client_id="test_id",
+            client_secret="test_secret",
+            refresh_token="token1",
+        )
+
+        client1 = service._get_client()
+        assert service._client is client1
+
+        # Change token - should invalidate cached client
+        service.refresh_token = "token2"
+        assert service._client is None
+
+        # Getting client now creates a new one
+        client2 = service._get_client()
+        assert client2 is not client1
+
+        # Cleanup
+        service._close_client()
+
+    def test_client_not_invalidated_if_token_unchanged(self):
+        """Test cached client is preserved if refresh_token is set to same value."""
+        service = ClubCalendarService(
+            client_id="test_id",
+            client_secret="test_secret",
+            refresh_token="same_token",
+        )
+
+        client1 = service._get_client()
+
+        # Set to same value - should not invalidate
+        service.refresh_token = "same_token"
+        assert service._client is client1
+
+        # Cleanup
+        service._close_client()
+
 
 class TestOAuthFlowE2E:
     """True E2E tests for OAuth flow - spins up actual servers."""

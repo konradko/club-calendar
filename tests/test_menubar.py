@@ -944,6 +944,31 @@ class TestMenuBarController:
 
         assert controller.should_auto_sync() is False
 
+    def test_should_auto_sync_false_when_sync_in_progress(self, mock_settings):
+        """Test should_auto_sync returns False when sync is already running."""
+        controller = MenuBarController(settings=mock_settings)
+        controller.last_sync = None  # Would normally return True
+
+        # Acquire the sync lock to simulate sync in progress
+        controller._sync_lock.acquire()
+        try:
+            assert controller.should_auto_sync() is False
+        finally:
+            controller._sync_lock.release()
+
+    def test_run_sync_skips_if_already_running(self, mock_settings):
+        """Test run_sync returns immediately if sync is already in progress."""
+        controller = MenuBarController(settings=mock_settings)
+
+        # Acquire the sync lock to simulate sync in progress
+        controller._sync_lock.acquire()
+        try:
+            result = controller.run_sync()
+            assert result.success is True
+            assert "already in progress" in result.message
+        finally:
+            controller._sync_lock.release()
+
 
 class TestOAuthCallbackHandler:
     """Tests for OAuth callback HTTP handler."""
