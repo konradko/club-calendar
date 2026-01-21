@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.request
 
+import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -227,13 +228,18 @@ class TestOAuthFlowE2E:
         """Test OAuth callback handles token exchange failure."""
         port = find_free_port()
 
-        # Mock token exchange to fail
-        httpx_mock.add_response(
-            url="https://www.strava.com/oauth/token",
-            method="POST",
-            status_code=400,
-            json={"error": "invalid_code"},
-        )
+        # Mock all Strava API requests with token exchange returning failure
+        def strava_handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if request.method == "POST" and "/oauth/token" in url:
+                return httpx.Response(400, json={"error": "invalid_code"})
+            if "/athlete/clubs" in url:
+                return httpx.Response(200, json=[])
+            if "/group_events" in url:
+                return httpx.Response(200, json=[])
+            return httpx.Response(404, text="Not found")
+
+        httpx_mock.add_callback(strava_handler, is_reusable=True, is_optional=True)
 
         service = ClubCalendarService(
             client_id="test_id",

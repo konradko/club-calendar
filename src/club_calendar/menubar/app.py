@@ -435,7 +435,7 @@ class MenuBarController:
         self._has_errors = False
 
         # Clear log file at start of sync (logs show last sync only)
-        log_file = get_logs_dir() / "club_calendar.log"
+        log_file = get_logs_dir() / "club-calendar.log"
         if log_file.exists():
             log_file.write_text("")
 
