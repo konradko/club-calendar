@@ -61,3 +61,26 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 show_error_codes = true
 exclude = ["tests/"]
+
+[tool.coverage.run]
+omit = [
+    "src/club_calendar/menubar/__main__.py",  # Entry point
+]
+
+[tool.coverage.report]
+exclude_also = [
+    # Platform-specific code that requires macOS
+    "if HAS_APPKIT:",
+    "HAS_APPKIT = False",
+    "if getattr\\(sys, .frozen., False\\)",  # PyInstaller frozen check
+    "except RuntimeError:",  # rumps notification fallback
+    "def _set_retina_icon",  # AppKit icon handling
+    "def _update_menu_on_main_thread",  # NSOperationQueue
+    "class ClubCalendarApp",  # rumps App class
+    "@rumps\\.",  # rumps decorators
+    "rumps\\.",  # rumps calls
+    "NSOperationQueue",
+    "NSImage",
+    "NSAttributedString",
+    "# No bundle identifier",
+]
