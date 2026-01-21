@@ -1344,11 +1344,13 @@ def create_app(rumps_module=None, controller=None):
                 self.menu.add(
                     rumps.MenuItem("Set Strava credentials...", callback=self.edit_config)
                 )
+                self.menu.add(rumps.separator)
+                self.menu.add(self._build_settings_menu())
             else:
                 # Step 2: Have credentials, need auth - click starts OAuth
                 self.menu.add(rumps.MenuItem("Authenticate with Strava...", callback=self.run_auth))
                 self.menu.add(rumps.separator)
-                self.menu.add(rumps.MenuItem("Edit config...", callback=self.edit_config))
+                self.menu.add(self._build_settings_menu())
 
             self.menu.add(rumps.separator)
             self.menu.add(rumps.MenuItem("Quit", callback=self.quit_app))
