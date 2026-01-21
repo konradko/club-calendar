@@ -482,3 +482,307 @@ class TestRequestCalendarAccess:
             granted, error = request_calendar_access()
             assert granted is False
             assert error == "User explicitly denied"
+
+
+class TestFindOrCreateCalendarFallback:
+    """Tests for _find_or_create_calendar fallback source."""
+
+    def test_uses_first_source_when_no_local_or_icloud(self, mock_eventkit):
+        """Test uses first available source when no local or iCloud."""
+        from club_calendar.menubar.eventkit import _find_or_create_calendar
+
+        mock_store = MagicMock()
+        mock_store.calendarsForEntityType_.return_value = []
+
+        # Create a source that's neither Local (0) nor CalDAV (1)
+        other_source = MagicMock()
+        other_source.sourceType.return_value = 2  # Some other type
+        other_source.title.return_value = "Exchange"
+        mock_store.sources.return_value = [other_source]
+
+        new_cal = MagicMock()
+        mock_eventkit.EKCalendar.calendarForEntityType_eventStore_.return_value = new_cal
+        mock_store.saveCalendar_commit_error_.return_value = True
+
+        with patch("club_calendar.menubar.eventkit._import_eventkit", return_value=mock_eventkit):
+            cal, error = _find_or_create_calendar(mock_store, "Club Calendar")
+            assert cal is new_cal
+            assert error is None
+            # Should use the first available source
+            new_cal.setSource_.assert_called_once_with(other_source)
+
+
+class TestMarkCancelledEvents:
+    """Tests for mark cancelled events functionality."""
+
+    def test_marks_cancelled_events(self, mock_eventkit, mock_foundation, sample_club_event):
+        """Test that events not in Strava are marked as cancelled."""
+        from club_calendar.menubar.eventkit import sync_events_to_calendar
+
+        mock_store = MagicMock()
+        mock_calendar = MagicMock()
+
+        # Existing event that is NOT in our events list (should be cancelled)
+        existing_event = MagicMock()
+        mock_url = MagicMock()
+        mock_url.absoluteString.return_value = "https://www.strava.com/clubs/123/group_events/9999"
+        existing_event.URL.return_value = mock_url
+        existing_event.title.return_value = "Old Event"  # Not already cancelled
+        mock_store.eventsMatchingPredicate_.return_value = [existing_event]
+
+        mock_eventkit.EKEvent.eventWithEventStore_.return_value = MagicMock()
+
+        with (
+            patch("club_calendar.menubar.eventkit._import_eventkit", return_value=mock_eventkit),
+            patch(
+                "club_calendar.menubar.eventkit._get_event_store", return_value=(mock_store, None)
+            ),
+            patch(
+                "club_calendar.menubar.eventkit._find_or_create_calendar",
+                return_value=(mock_calendar, None),
+            ),
+            patch.dict("sys.modules", {"Foundation": mock_foundation}),
+        ):
+            result = sync_events_to_calendar([sample_club_event])
+            assert result.success is True
+            # The existing event should be marked as cancelled
+            existing_event.setTitle_.assert_called_with("[Cancelled] Old Event")
+            assert result.events_removed == 1
+
+    def test_skips_event_without_url(self, mock_eventkit, mock_foundation, sample_club_event):
+        """Test that events without URL are skipped during cancellation check."""
+        from club_calendar.menubar.eventkit import sync_events_to_calendar
+
+        mock_store = MagicMock()
+        mock_calendar = MagicMock()
+
+        # Existing event with no URL
+        existing_event = MagicMock()
+        existing_event.URL.return_value = None
+        mock_store.eventsMatchingPredicate_.return_value = [existing_event]
+
+        mock_eventkit.EKEvent.eventWithEventStore_.return_value = MagicMock()
+
+        with (
+            patch("club_calendar.menubar.eventkit._import_eventkit", return_value=mock_eventkit),
+            patch(
+                "club_calendar.menubar.eventkit._get_event_store", return_value=(mock_store, None)
+            ),
+            patch(
+                "club_calendar.menubar.eventkit._find_or_create_calendar",
+                return_value=(mock_calendar, None),
+            ),
+            patch.dict("sys.modules", {"Foundation": mock_foundation}),
+        ):
+            result = sync_events_to_calendar([sample_club_event])
+            assert result.success is True
+            # Event without URL should not be modified
+            existing_event.setTitle_.assert_not_called()
+
+    def test_skips_already_cancelled_event(self, mock_eventkit, mock_foundation, sample_club_event):
+        """Test that already cancelled events are not modified."""
+        from club_calendar.menubar.eventkit import sync_events_to_calendar
+
+        mock_store = MagicMock()
+        mock_calendar = MagicMock()
+
+        # Existing event that's already marked as cancelled
+        existing_event = MagicMock()
+        mock_url = MagicMock()
+        mock_url.absoluteString.return_value = "https://www.strava.com/clubs/123/group_events/9999"
+        existing_event.URL.return_value = mock_url
+        existing_event.title.return_value = "[Cancelled] Already Cancelled Event"
+        mock_store.eventsMatchingPredicate_.return_value = [existing_event]
+
+        mock_eventkit.EKEvent.eventWithEventStore_.return_value = MagicMock()
+
+        with (
+            patch("club_calendar.menubar.eventkit._import_eventkit", return_value=mock_eventkit),
+            patch(
+                "club_calendar.menubar.eventkit._get_event_store", return_value=(mock_store, None)
+            ),
+            patch(
+                "club_calendar.menubar.eventkit._find_or_create_calendar",
+                return_value=(mock_calendar, None),
+            ),
+            patch.dict("sys.modules", {"Foundation": mock_foundation}),
+        ):
+            result = sync_events_to_calendar([sample_club_event])
+            assert result.success is True
+            # Already cancelled event should not be modified again
+            existing_event.setTitle_.assert_not_called()
+
+
+class TestSyncEventExceptionHandling:
+    """Tests for exception handling during sync."""
+
+    def test_sync_handles_event_save_error(self, mock_eventkit, mock_foundation, sample_club_event):
+        """Test sync continues when individual event save fails."""
+        from club_calendar.menubar.eventkit import sync_events_to_calendar
+
+        mock_store = MagicMock()
+        mock_calendar = MagicMock()
+
+        mock_store.eventsMatchingPredicate_.return_value = []
+        mock_store.saveEvent_span_error_.side_effect = OSError("Save failed")
+
+        mock_eventkit.EKEvent.eventWithEventStore_.return_value = MagicMock()
+
+        with (
+            patch("club_calendar.menubar.eventkit._import_eventkit", return_value=mock_eventkit),
+            patch(
+                "club_calendar.menubar.eventkit._get_event_store", return_value=(mock_store, None)
+            ),
+            patch(
+                "club_calendar.menubar.eventkit._find_or_create_calendar",
+                return_value=(mock_calendar, None),
+            ),
+            patch.dict("sys.modules", {"Foundation": mock_foundation}),
+        ):
+            result = sync_events_to_calendar([sample_club_event])
+            # Should still succeed even if individual event save fails
+            assert result.success is True
+
+    def test_sync_handles_commit_error(self, mock_eventkit, mock_foundation):
+        """Test sync handles commit error gracefully."""
+        from club_calendar.menubar.eventkit import sync_events_to_calendar
+
+        mock_store = MagicMock()
+        mock_calendar = MagicMock()
+
+        mock_store.eventsMatchingPredicate_.return_value = []
+        mock_store.commit_.side_effect = OSError("Commit failed")
+
+        with (
+            patch("club_calendar.menubar.eventkit._import_eventkit", return_value=mock_eventkit),
+            patch(
+                "club_calendar.menubar.eventkit._get_event_store", return_value=(mock_store, None)
+            ),
+            patch(
+                "club_calendar.menubar.eventkit._find_or_create_calendar",
+                return_value=(mock_calendar, None),
+            ),
+            patch.dict("sys.modules", {"Foundation": mock_foundation}),
+        ):
+            result = sync_events_to_calendar([])
+            # Should still succeed even if commit fails (already synced to store)
+            assert result.success is True
+
+    def test_sync_handles_unexpected_exception(
+        self, mock_eventkit, mock_foundation, sample_club_event
+    ):
+        """Test sync handles unexpected exceptions (e.g., pyobjc errors)."""
+        from club_calendar.menubar.eventkit import sync_events_to_calendar
+
+        mock_store = MagicMock()
+        mock_calendar = MagicMock()
+
+        mock_store.eventsMatchingPredicate_.return_value = []
+        mock_store.saveEvent_span_error_.side_effect = RuntimeError("PyObjC error")
+
+        mock_eventkit.EKEvent.eventWithEventStore_.return_value = MagicMock()
+
+        with (
+            patch("club_calendar.menubar.eventkit._import_eventkit", return_value=mock_eventkit),
+            patch(
+                "club_calendar.menubar.eventkit._get_event_store", return_value=(mock_store, None)
+            ),
+            patch(
+                "club_calendar.menubar.eventkit._find_or_create_calendar",
+                return_value=(mock_calendar, None),
+            ),
+            patch.dict("sys.modules", {"Foundation": mock_foundation}),
+        ):
+            result = sync_events_to_calendar([sample_club_event])
+            # Should succeed but event not added
+            assert result.success is True
+            assert result.events_added == 0
+
+    def test_cancelled_event_save_error_handled(self, mock_eventkit, mock_foundation):
+        """Test mark cancelled handles save error gracefully."""
+        from club_calendar.menubar.eventkit import sync_events_to_calendar
+
+        mock_store = MagicMock()
+        mock_calendar = MagicMock()
+
+        # Existing event that should be cancelled but save fails
+        existing_event = MagicMock()
+        mock_url = MagicMock()
+        mock_url.absoluteString.return_value = "https://www.strava.com/clubs/123/group_events/9999"
+        existing_event.URL.return_value = mock_url
+        existing_event.title.return_value = "Event To Cancel"
+        mock_store.eventsMatchingPredicate_.return_value = [existing_event]
+        mock_store.saveEvent_span_error_.side_effect = OSError("Save failed")
+
+        with (
+            patch("club_calendar.menubar.eventkit._import_eventkit", return_value=mock_eventkit),
+            patch(
+                "club_calendar.menubar.eventkit._get_event_store", return_value=(mock_store, None)
+            ),
+            patch(
+                "club_calendar.menubar.eventkit._find_or_create_calendar",
+                return_value=(mock_calendar, None),
+            ),
+            patch.dict("sys.modules", {"Foundation": mock_foundation}),
+        ):
+            result = sync_events_to_calendar([])  # No new events
+            assert result.success is True
+            # Event should have been marked as cancelled (title set) even if save fails
+            existing_event.setTitle_.assert_called_with("[Cancelled] Event To Cancel")
+
+    def test_cancelled_event_unexpected_error_handled(self, mock_eventkit, mock_foundation):
+        """Test mark cancelled handles unexpected (pyobjc) errors gracefully."""
+        from club_calendar.menubar.eventkit import sync_events_to_calendar
+
+        mock_store = MagicMock()
+        mock_calendar = MagicMock()
+
+        # Existing event that should be cancelled but save raises unexpected error
+        existing_event = MagicMock()
+        mock_url = MagicMock()
+        mock_url.absoluteString.return_value = "https://www.strava.com/clubs/123/group_events/9999"
+        existing_event.URL.return_value = mock_url
+        existing_event.title.return_value = "Event To Cancel"
+        mock_store.eventsMatchingPredicate_.return_value = [existing_event]
+        mock_store.saveEvent_span_error_.side_effect = RuntimeError("PyObjC error")
+
+        with (
+            patch("club_calendar.menubar.eventkit._import_eventkit", return_value=mock_eventkit),
+            patch(
+                "club_calendar.menubar.eventkit._get_event_store", return_value=(mock_store, None)
+            ),
+            patch(
+                "club_calendar.menubar.eventkit._find_or_create_calendar",
+                return_value=(mock_calendar, None),
+            ),
+            patch.dict("sys.modules", {"Foundation": mock_foundation}),
+        ):
+            result = sync_events_to_calendar([])  # No new events
+            assert result.success is True
+            # Event should have been marked as cancelled (title set) even if save fails
+            existing_event.setTitle_.assert_called_with("[Cancelled] Event To Cancel")
+
+    def test_commit_unexpected_error_handled(self, mock_eventkit, mock_foundation):
+        """Test commit handles unexpected (pyobjc) errors gracefully."""
+        from club_calendar.menubar.eventkit import sync_events_to_calendar
+
+        mock_store = MagicMock()
+        mock_calendar = MagicMock()
+
+        mock_store.eventsMatchingPredicate_.return_value = []
+        mock_store.commit_.side_effect = RuntimeError("PyObjC commit error")
+
+        with (
+            patch("club_calendar.menubar.eventkit._import_eventkit", return_value=mock_eventkit),
+            patch(
+                "club_calendar.menubar.eventkit._get_event_store", return_value=(mock_store, None)
+            ),
+            patch(
+                "club_calendar.menubar.eventkit._find_or_create_calendar",
+                return_value=(mock_calendar, None),
+            ),
+            patch.dict("sys.modules", {"Foundation": mock_foundation}),
+        ):
+            result = sync_events_to_calendar([])
+            # Should still succeed even if commit fails with unexpected error
+            assert result.success is True

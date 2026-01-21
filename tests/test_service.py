@@ -13,7 +13,7 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from club_calendar.core.service import ClubCalendarService
+from club_calendar.core.service import ClubCalendarService, _truncate_error
 
 
 def find_free_port() -> int:
@@ -21,6 +21,27 @@ def find_free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
         return s.getsockname()[1]
+
+
+class TestTruncateError:
+    """Tests for _truncate_error helper function."""
+
+    def test_short_message_unchanged(self):
+        """Test messages under max_length are not modified."""
+        msg = "Short error"
+        assert _truncate_error(msg) == msg
+
+    def test_long_message_truncated(self):
+        """Test messages over max_length are truncated with ellipsis."""
+        msg = "x" * 200  # Longer than 150
+        result = _truncate_error(msg)
+        assert len(result) == 150
+        assert result.endswith("...")
+
+    def test_exact_length_unchanged(self):
+        """Test message exactly at max_length is not modified."""
+        msg = "x" * 150
+        assert _truncate_error(msg) == msg
 
 
 class TestClubCalendarService:
@@ -539,6 +560,28 @@ class TestExchangeCodeExceptions:
 
         assert result.success is False
         assert "Network failure" in result.message
+
+    def test_exchange_code_http_error(self, httpx_mock: HTTPXMock):
+        """Test exchange_code handles httpx.HTTPError."""
+        httpx_mock.add_exception(httpx.HTTPError("HTTP error"))
+
+        service = ClubCalendarService(client_id="id", client_secret="secret", refresh_token=None)
+
+        result = service.exchange_code("some_code")
+
+        assert result.success is False
+        assert "HTTP error" in result.message
+
+    def test_exchange_code_timeout(self, httpx_mock: HTTPXMock):
+        """Test exchange_code handles httpx.TimeoutException."""
+        httpx_mock.add_exception(httpx.TimeoutException("Request timed out"))
+
+        service = ClubCalendarService(client_id="id", client_secret="secret", refresh_token=None)
+
+        result = service.exchange_code("some_code")
+
+        assert result.success is False
+        assert "Request timed out" in result.message
 
 
 class TestOAuthWithBrowser:

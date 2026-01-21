@@ -287,6 +287,23 @@ class TestSettingsClass:
         # New club should be auto-enabled (matches city filter)
         assert loaded.clubs["456"]["enabled"] is True
 
+    def test_settings_save_with_url_overrides(self, mock_config_file):
+        """Test save includes URL overrides when set."""
+        settings = Settings(
+            strava_client_id="test",
+            strava_client_secret="secret",
+            strava_api_url="http://localhost:8080/api/v3",
+            strava_token_url="http://localhost:8080/oauth/token",
+            strava_auth_url="http://localhost:8080/oauth/authorize",
+        )
+        settings.save()
+
+        content = mock_config_file.read_text()
+        assert "# URL overrides (for testing)" in content
+        assert "strava_api_url: http://localhost:8080/api/v3" in content
+        assert "strava_token_url: http://localhost:8080/oauth/token" in content
+        assert "strava_auth_url: http://localhost:8080/oauth/authorize" in content
+
     def test_settings_schema_version_upgrade(self, mock_config_file):
         """Test that old config without schema_version gets upgraded."""
         from club_calendar.menubar.config import CURRENT_SCHEMA_VERSION

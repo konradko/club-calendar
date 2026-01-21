@@ -238,3 +238,16 @@ def test_get_all_club_events_handles_errors(httpx_mock: HTTPXMock):
     # Should get events from club 456 even though 123 failed
     assert len(events) == 1
     assert events[0].title == "Event"
+
+
+def test_ensure_access_token_refresh_returns_none():
+    """Test _ensure_access_token handles case where refresh doesn't set token."""
+    from unittest.mock import patch
+
+    client = StravaClient("id", "secret", refresh_token="token")
+
+    # Mock refresh_access_token to not set _access_token
+    with patch.object(client, "refresh_access_token"):
+        # _access_token is None, refresh_token exists, but refresh doesn't set token
+        with pytest.raises(StravaAuthError, match="Failed to obtain access token"):
+            client._ensure_access_token()
