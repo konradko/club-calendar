@@ -87,17 +87,20 @@ def setup_logging(settings: Settings) -> None:
     formatter = logging.Formatter(LOG_FORMAT, LOG_DATEFMT)
     root.setLevel(level)
 
-    if settings.log_output == "file":
-        handler: logging.Handler = logging.FileHandler(get_logs_dir() / "club-calendar.log")
-    elif settings.log_output == "console":
-        handler = logging.StreamHandler()
-    else:
+    handlers: list[logging.Handler] = []
+    if settings.log_output in ("file", "both"):
+        handlers.append(logging.FileHandler(get_logs_dir() / "club-calendar.log"))
+    if settings.log_output in ("console", "both"):
+        handlers.append(logging.StreamHandler())
+
+    if not handlers:
         logging.disable(logging.CRITICAL)
         return
 
-    handler.setLevel(level)
-    handler.setFormatter(formatter)
-    root.addHandler(handler)
+    for handler in handlers:
+        handler.setLevel(level)
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
 
 
 def is_dev_mode() -> bool:

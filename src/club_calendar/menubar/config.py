@@ -100,7 +100,7 @@ class Settings:
 
     # Logging
     debug: bool = False  # Enable verbose logging (INFO level)
-    log_output: str = "file"  # "console", "file", or "none"
+    log_output: str = "both"  # "console", "file", "both", or "none"
 
     # Auto-reload config on file change
     auto_reload_config: bool = True
@@ -323,8 +323,8 @@ auto_reload_config: {str(self.auto_reload_config).lower()}  # Watch config file 
 
         # Logging
         debug = config.get("debug", False)
-        log_output = config.get("log_output", "none")
-        auto_reload_config = config.get("auto_reload_config", False)
+        log_output = config.get("log_output", "both")
+        auto_reload_config = config.get("auto_reload_config", True)
 
         # Strava API URLs (for mock server testing)
         strava_api_url = config.get("strava_api_url", "")
