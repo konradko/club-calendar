@@ -1,0 +1,17 @@
+# Build artifacts
+.build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+.swiftpm/
+
+# App bundles (built locally)
+*.app
+
+# DMG (built locally)
+*.dmg
+
+# macOS
+.DS_Store
