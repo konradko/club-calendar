@@ -35,11 +35,27 @@ struct ClubCalendarApp: App {
     }
 
     private var menuBarIcon: NSImage {
-        guard let url = Bundle.main.url(forResource: "icon_menubarTemplate", withExtension: "png"),
-              let image = NSImage(contentsOf: url) else {
-            // Fallback to SF Symbol if template not found
+        let image = NSImage(size: NSSize(width: 22, height: 22))
+
+        // Load 1x image
+        if let url1x = Bundle.main.url(forResource: "icon_menubarTemplate", withExtension: "png"),
+           let rep1x = NSImageRep(contentsOf: url1x) {
+            rep1x.size = NSSize(width: 22, height: 22)
+            image.addRepresentation(rep1x)
+        }
+
+        // Load 2x image
+        if let url2x = Bundle.main.url(forResource: "icon_menubarTemplate@2x", withExtension: "png"),
+           let rep2x = NSImageRep(contentsOf: url2x) {
+            rep2x.size = NSSize(width: 22, height: 22)  // Logical size, not pixel size
+            image.addRepresentation(rep2x)
+        }
+
+        // Fallback if no images loaded
+        if image.representations.isEmpty {
             return NSImage(systemSymbolName: "calendar.badge.clock", accessibilityDescription: "Club Calendar")!
         }
+
         image.isTemplate = true
         return image
     }

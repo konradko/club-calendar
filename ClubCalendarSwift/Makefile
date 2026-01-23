@@ -9,13 +9,8 @@ BUNDLE_ID = com.clubcalendar.app
 DEV_CERT_NAME = ClubCalendar Development
 ENTITLEMENTS = ClubCalendar/Resources/ClubCalendar.entitlements
 
-# Check if dev certificate exists
-HAS_DEV_CERT := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -q "$(DEV_CERT_NAME)" && echo yes)
-ifeq ($(HAS_DEV_CERT),yes)
-    SIGN_IDENTITY = "$(DEV_CERT_NAME)"
-else
-    SIGN_IDENTITY = -
-endif
+# Function to get sign identity (evaluated at runtime)
+get_sign_identity = $(shell security find-identity -v -p codesigning 2>/dev/null | grep -q "$(DEV_CERT_NAME)" && echo '"$(DEV_CERT_NAME)"' || echo '-')
 
 # Build release binary
 build:
@@ -71,8 +66,8 @@ bundle-debug: build-debug
 	@cp "ClubCalendar/Resources/icon_menubarTemplate.png" "$(APP_PATH_DEBUG)/Contents/Resources/"
 	@cp "ClubCalendar/Resources/icon_menubarTemplate@2x.png" "$(APP_PATH_DEBUG)/Contents/Resources/"
 	@$(call create_plist,$(APP_PATH_DEBUG))
-	@echo "Signing app with identity: $(SIGN_IDENTITY)"
-	@codesign --force --deep --sign $(SIGN_IDENTITY) --entitlements $(ENTITLEMENTS) "$(APP_PATH_DEBUG)"
+	@echo "Signing app with identity: $(call get_sign_identity)"
+	@codesign --force --deep --sign $(call get_sign_identity) --entitlements $(ENTITLEMENTS) "$(APP_PATH_DEBUG)"
 	@echo "Debug app ready at $(APP_PATH_DEBUG)"
 
 # Create release app bundle
@@ -87,10 +82,10 @@ bundle: build
 	@$(call create_plist,$(APP_PATH_RELEASE))
 	@echo "App bundle created at $(APP_PATH_RELEASE)"
 
-# Sign the release app
-sign: bundle
-	@echo "Signing app with identity: $(SIGN_IDENTITY)"
-	codesign --force --deep --sign $(SIGN_IDENTITY) --entitlements $(ENTITLEMENTS) "$(APP_PATH_RELEASE)"
+# Sign the release app (ensures dev certificate exists)
+sign: bundle setup-cert
+	@echo "Signing app with identity: $(call get_sign_identity)"
+	codesign --force --deep --sign $(call get_sign_identity) --entitlements $(ENTITLEMENTS) "$(APP_PATH_RELEASE)"
 	@echo "App signed successfully"
 
 # Create DMG installer
