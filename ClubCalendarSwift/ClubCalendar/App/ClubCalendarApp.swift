@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct ClubCalendarApp: App {
@@ -10,7 +11,11 @@ struct ClubCalendarApp: App {
             MenuBarView()
                 .environment(appState)
         } label: {
-            Image(systemName: menuBarIconName)
+            if appState.syncService.syncInProgress {
+                Image(systemName: "arrow.triangle.2.circlepath")
+            } else {
+                Image(nsImage: menuBarIcon)
+            }
         }
         .menuBarExtraStyle(.menu)
 
@@ -29,10 +34,13 @@ struct ClubCalendarApp: App {
         .defaultPosition(.center)
     }
 
-    private var menuBarIconName: String {
-        if appState.syncService.syncInProgress {
-            return "arrow.triangle.2.circlepath"
+    private var menuBarIcon: NSImage {
+        guard let url = Bundle.main.url(forResource: "icon_menubarTemplate", withExtension: "png"),
+              let image = NSImage(contentsOf: url) else {
+            // Fallback to SF Symbol if template not found
+            return NSImage(systemSymbolName: "calendar.badge.clock", accessibilityDescription: "Club Calendar")!
         }
-        return "calendar.badge.clock"
+        image.isTemplate = true
+        return image
     }
 }

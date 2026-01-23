@@ -67,6 +67,9 @@ bundle-debug: build-debug
 	@mkdir -p "$(APP_PATH_DEBUG)/Contents/MacOS"
 	@mkdir -p "$(APP_PATH_DEBUG)/Contents/Resources"
 	@cp "$(BUILD_DIR_DEBUG)/$(APP_NAME)" "$(APP_PATH_DEBUG)/Contents/MacOS/"
+	@cp "ClubCalendar/Resources/AppIcon.icns" "$(APP_PATH_DEBUG)/Contents/Resources/"
+	@cp "ClubCalendar/Resources/icon_menubarTemplate.png" "$(APP_PATH_DEBUG)/Contents/Resources/"
+	@cp "ClubCalendar/Resources/icon_menubarTemplate@2x.png" "$(APP_PATH_DEBUG)/Contents/Resources/"
 	@$(call create_plist,$(APP_PATH_DEBUG))
 	@echo "Signing app with identity: $(SIGN_IDENTITY)"
 	@codesign --force --deep --sign $(SIGN_IDENTITY) --entitlements $(ENTITLEMENTS) "$(APP_PATH_DEBUG)"
@@ -78,6 +81,9 @@ bundle: build
 	@mkdir -p "$(APP_PATH_RELEASE)/Contents/MacOS"
 	@mkdir -p "$(APP_PATH_RELEASE)/Contents/Resources"
 	@cp "$(BUILD_DIR_RELEASE)/$(APP_NAME)" "$(APP_PATH_RELEASE)/Contents/MacOS/"
+	@cp "ClubCalendar/Resources/AppIcon.icns" "$(APP_PATH_RELEASE)/Contents/Resources/"
+	@cp "ClubCalendar/Resources/icon_menubarTemplate.png" "$(APP_PATH_RELEASE)/Contents/Resources/"
+	@cp "ClubCalendar/Resources/icon_menubarTemplate@2x.png" "$(APP_PATH_RELEASE)/Contents/Resources/"
 	@$(call create_plist,$(APP_PATH_RELEASE))
 	@echo "App bundle created at $(APP_PATH_RELEASE)"
 
@@ -126,6 +132,8 @@ define create_plist
 	@echo '    <string>1.0.0</string>' >> "$(1)/Contents/Info.plist"
 	@echo '    <key>CFBundlePackageType</key>' >> "$(1)/Contents/Info.plist"
 	@echo '    <string>APPL</string>' >> "$(1)/Contents/Info.plist"
+	@echo '    <key>CFBundleIconFile</key>' >> "$(1)/Contents/Info.plist"
+	@echo '    <string>AppIcon</string>' >> "$(1)/Contents/Info.plist"
 	@echo '    <key>LSMinimumSystemVersion</key>' >> "$(1)/Contents/Info.plist"
 	@echo '    <string>26.0</string>' >> "$(1)/Contents/Info.plist"
 	@echo '    <key>LSUIElement</key>' >> "$(1)/Contents/Info.plist"
@@ -153,6 +161,26 @@ endef
 setup-cert:
 	@./scripts/create-dev-cert.sh
 
+# Reset calendar permission (requires re-grant on next launch)
+reset-calendar:
+	@tccutil reset Calendar $(BUNDLE_ID)
+	@echo "Calendar permission reset. Run 'make restart' to relaunch."
+
+# Reset all permissions (calendar, keychain items)
+reset-all: reset-calendar
+	@security delete-generic-password -a "com.clubcalendar.clientId" 2>/dev/null || true
+	@security delete-generic-password -a "com.clubcalendar.clientSecret" 2>/dev/null || true
+	@security delete-generic-password -a "com.clubcalendar.accessToken" 2>/dev/null || true
+	@security delete-generic-password -a "com.clubcalendar.refreshToken" 2>/dev/null || true
+	@security delete-generic-password -a "com.clubcalendar.tokenExpiry" 2>/dev/null || true
+	@security delete-generic-password -a "com.clubcalendar.athleteId" 2>/dev/null || true
+	@security delete-generic-password -a "com.clubcalendar.athleteName" 2>/dev/null || true
+	@echo "All permissions and keychain items reset."
+
+# Open System Settings to calendar permissions
+open-calendar-settings:
+	@open "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars"
+
 # Help
 help:
 	@echo "Club Calendar - Development Commands"
@@ -179,8 +207,11 @@ help:
 	@echo "  make dmg        - Create DMG installer"
 	@echo "  make release    - Clean build and create DMG"
 	@echo ""
-	@echo "Setup:"
-	@echo "  make setup-cert - Create local dev certificate (fixes keychain prompts)"
+	@echo "Setup & Reset:"
+	@echo "  make setup-cert          - Create local dev certificate (fixes keychain prompts)"
+	@echo "  make reset-calendar      - Reset calendar permission"
+	@echo "  make reset-all           - Reset all permissions and keychain items"
+	@echo "  make open-calendar-settings - Open System Settings to calendar permissions"
 	@echo ""
 	@echo "Other:"
 	@echo "  make clean      - Remove build artifacts"
