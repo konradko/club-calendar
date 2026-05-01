@@ -1,6 +1,7 @@
 import Foundation
 import EventKit
 import AppKit
+import os
 
 /// Errors from calendar operations.
 enum CalendarError: Error, LocalizedError, Sendable {
@@ -52,20 +53,23 @@ actor CalendarService {
     /// Checks the current calendar access status.
     func checkAccessStatus() -> CalendarAccessStatus {
         let status = EKEventStore.authorizationStatus(for: .event)
+        let result: CalendarAccessStatus
         switch status {
         case .fullAccess, .authorized:
-            return .authorized
+            result = .authorized
         case .denied:
-            return .denied
+            result = .denied
         case .restricted:
-            return .restricted
+            result = .restricted
         case .notDetermined:
-            return .notDetermined
+            result = .notDetermined
         case .writeOnly:
-            return .denied  // We need read access too
+            result = .denied  // We need read access too
         @unknown default:
-            return .notDetermined
+            result = .notDetermined
         }
+        Logger.calendar.debug("Calendar access status: \(String(describing: result))")
+        return result
     }
 
     /// Requests full calendar access.
@@ -136,20 +140,34 @@ actor CalendarService {
 
     /// Syncs Strava events to the calendar.
     func syncEvents(_ clubEvents: [ClubEvent]) async throws -> SyncResult {
+        Logger.calendar.info("Syncing \(clubEvents.count) event(s) to calendar")
+        FileLog.write("Syncing \(clubEvents.count) event(s) to calendar '\(self.calendarName)'", category: "calendar")
         let calendar = try getOrCreateCalendar()
         var created = 0
         var updated = 0
         var cancelled = 0
 
-        // Get existing events from the calendar (next 90 days)
-        let startDate = Date()
-        let endDate = Calendar.current.date(byAdding: .day, value: 90, to: startDate)!
+        // Look at a wide window so past EKEvents with the same Strava ID
+        // are visible to dedup — the old "now → +90d" predicate missed them
+        // and caused a fresh duplicate every time a recurring event rolled
+        // over to its next occurrence.
+        let now = Date()
+        let lookbackStart = Calendar.current.date(byAdding: .day, value: -180, to: now)!
+        let lookaheadEnd = Calendar.current.date(byAdding: .day, value: 180, to: now)!
         let predicate = eventStore.predicateForEvents(
-            withStart: startDate,
-            end: endDate,
+            withStart: lookbackStart,
+            end: lookaheadEnd,
             calendars: [calendar]
         )
-        let existingEvents = eventStore.events(matching: predicate)
+        var existingEvents = eventStore.events(matching: predicate)
+
+        // Self-healing: collapse pre-existing duplicates created by older
+        // buggy syncs, keeping one event per Strava ID.
+        let removedDups = removeDuplicates(in: &existingEvents)
+        if removedDups > 0 {
+            Logger.calendar.info("Removed \(removedDups) duplicate event(s)")
+            FileLog.write("Removed \(removedDups) duplicate event(s)", category: "calendar")
+        }
 
         // Build lookup of existing events by Strava ID (stored in URL)
         var existingByStravaId: [Int: EKEvent] = [:]
@@ -172,7 +190,8 @@ actor CalendarService {
                         try eventStore.save(existingEvent, span: .thisEvent)
                         updated += 1
                     } catch {
-                        print("Failed to update event: \(error)")
+                        Logger.calendar.error("Failed to update event \(clubEvent.id): \(error.localizedDescription)")
+                        FileLog.write("Failed to update event \(clubEvent.id): \(error.localizedDescription)", level: "ERROR", category: "calendar")
                     }
                 }
             } else {
@@ -183,28 +202,35 @@ actor CalendarService {
                     try eventStore.save(event, span: .thisEvent)
                     created += 1
                 } catch {
-                    print("Failed to create event: \(error)")
+                    Logger.calendar.error("Failed to create event \(clubEvent.id): \(error.localizedDescription)")
+                    FileLog.write("Failed to create event \(clubEvent.id): \(error.localizedDescription)", level: "ERROR", category: "calendar")
                 }
             }
         }
 
-        // Mark events as cancelled if they're no longer in Strava
+        // Mark future events as cancelled if they're no longer in Strava.
+        // Past events stay untouched — Strava only returns upcoming events, so
+        // their absence from `activeStravaIds` doesn't mean they were cancelled.
         for (stravaId, existingEvent) in existingByStravaId {
+            guard existingEvent.startDate >= now else { continue }
             if !activeStravaIds.contains(stravaId) {
-                // Event was removed from Strava - mark as cancelled
                 if !existingEvent.title.hasPrefix("[CANCELLED]") {
                     existingEvent.title = "[CANCELLED] \(existingEvent.title ?? "")"
                     do {
                         try eventStore.save(existingEvent, span: .thisEvent)
                         cancelled += 1
                     } catch {
-                        print("Failed to mark event as cancelled: \(error)")
+                        Logger.calendar.error("Failed to cancel event \(stravaId): \(error.localizedDescription)")
+                        FileLog.write("Failed to cancel event \(stravaId): \(error.localizedDescription)", level: "ERROR", category: "calendar")
                     }
                 }
             }
         }
 
-        return SyncResult(created: created, updated: updated, cancelled: cancelled)
+        let result = SyncResult(created: created, updated: updated, cancelled: cancelled)
+        Logger.calendar.info("Calendar sync result: \(result.summary)")
+        FileLog.write("Calendar sync result: \(result.summary)", category: "calendar")
+        return result
     }
 
     // MARK: - Event Helpers
@@ -261,12 +287,70 @@ actor CalendarService {
         return notes.joined(separator: "\n\n")
     }
 
+    /// Collapses duplicate EKEvents that share a Strava ID. Mutates `events`
+    /// in place to drop the removed entries, returns the count removed.
+    /// Keeps one event per Strava ID, preferring the future occurrence
+    /// closest to `Date()` so the surviving entry represents the live event.
+    private func removeDuplicates(in events: inout [EKEvent]) -> Int {
+        var groups: [Int: [EKEvent]] = [:]
+        var unkeyed: [EKEvent] = []
+        for event in events {
+            if let url = event.url, let stravaId = extractStravaId(from: url) {
+                groups[stravaId, default: []].append(event)
+            } else {
+                unkeyed.append(event)
+            }
+        }
+
+        let now = Date()
+        var keepers: [EKEvent] = unkeyed
+        var removed = 0
+
+        for (_, group) in groups {
+            guard group.count > 1 else {
+                keepers.append(contentsOf: group)
+                continue
+            }
+            let sorted = group.sorted { lhs, rhs in
+                let lhsFuture = lhs.startDate >= now
+                let rhsFuture = rhs.startDate >= now
+                if lhsFuture != rhsFuture {
+                    return lhsFuture  // future ones first
+                }
+                if lhsFuture {
+                    return lhs.startDate < rhs.startDate  // soonest future
+                }
+                return lhs.startDate > rhs.startDate  // most recent past
+            }
+            let keeper = sorted.first!
+            keepers.append(keeper)
+            for victim in sorted.dropFirst() {
+                do {
+                    try eventStore.remove(victim, span: .thisEvent)
+                    removed += 1
+                } catch {
+                    Logger.calendar.error("Failed to remove duplicate: \(error.localizedDescription)")
+                    FileLog.write("Failed to remove duplicate: \(error.localizedDescription)", level: "ERROR", category: "calendar")
+                    keepers.append(victim)
+                }
+            }
+        }
+
+        events = keepers
+        return removed
+    }
+
     private func extractStravaId(from url: URL) -> Int? {
-        // URL format: https://www.strava.com/clubs/events/123
+        // Accept both real format (clubs/{club_id}/group_events/{event_id})
+        // and the legacy Swift-app format (clubs/events/{event_id}) so events
+        // created by older builds are still recognized for dedup.
         let path = url.pathComponents
         guard path.count >= 4,
-              path[path.count - 2] == "events",
               let id = Int(path.last ?? "") else {
+            return nil
+        }
+        let parent = path[path.count - 2]
+        guard parent == "group_events" || parent == "events" else {
             return nil
         }
         return id

@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Network
+import os
 
 /// Handles OAuth authentication with Strava using localhost callback.
 @MainActor
@@ -35,7 +36,12 @@ final class AuthService {
 
     /// Starts the OAuth flow by opening browser and listening for callback.
     func authenticate() async throws {
+        Logger.auth.info("Starting OAuth authentication flow")
+        FileLog.write("Starting OAuth authentication flow", category: "auth")
+
         guard let url = await authorizationURL() else {
+            Logger.auth.error("No API credentials configured")
+            FileLog.write("No API credentials configured", level: "ERROR", category: "auth")
             throw AuthError.noCredentials
         }
 
@@ -46,17 +52,29 @@ final class AuthService {
             // Start local server to receive callback
             do {
                 try startCallbackServer()
+                Logger.auth.info("Callback server started on port \(self.callbackPort)")
+                FileLog.write("Callback server started on port \(self.callbackPort)", category: "auth")
             } catch {
+                Logger.auth.error("Failed to start callback server: \(error.localizedDescription)")
+                FileLog.write("Failed to start callback server: \(error.localizedDescription)", level: "ERROR", category: "auth")
                 continuation.resume(throwing: AuthError.failedToStart)
                 return
             }
 
             // Open browser for authentication
             NSWorkspace.shared.open(url)
+            Logger.auth.info("Opened browser for Strava authorization")
+            FileLog.write("Opened browser for Strava authorization", category: "auth")
         }
+
+        Logger.auth.info("Received authorization code, exchanging for tokens")
+        FileLog.write("Received authorization code, exchanging for tokens", category: "auth")
 
         // Exchange code for tokens
         _ = try await stravaService.exchangeToken(code: code)
+
+        Logger.auth.info("Authentication complete")
+        FileLog.write("Authentication complete", category: "auth")
     }
 
     /// Starts a local HTTP server to receive the OAuth callback.
@@ -69,7 +87,8 @@ final class AuthService {
         listener?.stateUpdateHandler = { [weak self] state in
             switch state {
             case .failed(let error):
-                print("Listener failed: \(error)")
+                Logger.auth.error("Callback listener failed: \(error.localizedDescription)")
+                FileLog.write("Callback listener failed: \(error.localizedDescription)", level: "ERROR", category: "auth")
                 Task { @MainActor in
                     self?.authContinuation?.resume(throwing: AuthError.failedToStart)
                     self?.authContinuation = nil
@@ -98,7 +117,8 @@ final class AuthService {
                     self.processCallback(request: request, connection: connection)
                 }
             } else if let error = error {
-                print("Connection error: \(error)")
+                Logger.auth.error("OAuth callback connection error: \(error.localizedDescription)")
+                FileLog.write("OAuth callback connection error: \(error.localizedDescription)", level: "ERROR", category: "auth")
                 Task { @MainActor in
                     self.sendResponse(connection: connection, success: false, message: "Connection error")
                 }

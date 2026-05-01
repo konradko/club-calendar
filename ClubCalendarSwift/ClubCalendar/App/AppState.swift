@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import EventKit
 import ServiceManagement
+import os
 
 /// Type alias for clarity.
 typealias UpcomingEvent = CalendarEventData
@@ -23,6 +24,7 @@ final class AppState {
     var showSettings = false
     var calendarAccessStatus: CalendarAccessStatus = .notDetermined
     var upcomingEvents: [UpcomingEvent] = []
+    var availableCalendarNames: [String] = []
     var isLoading = false
     var errorMessage: String?
 
@@ -52,12 +54,18 @@ final class AppState {
     // MARK: - Lifecycle
 
     func onAppear() async {
+        Logger.app.info("App appeared, refreshing state")
+        FileLog.write("App appeared, refreshing state", category: "app")
         await refreshState()
 
         // Show onboarding if not completed
         if !settings.onboardingCompleted {
+            Logger.app.info("Onboarding not completed, showing setup")
+            FileLog.write("Onboarding not completed, showing setup", category: "app")
             showOnboarding = true
         } else {
+            Logger.app.info("Starting auto-sync (authenticated: \(self.isAuthenticated), calendar: \(String(describing: self.calendarAccessStatus)))")
+            FileLog.write("Starting auto-sync (authenticated: \(isAuthenticated), calendar: \(String(describing: calendarAccessStatus)))", category: "app")
             // Start auto-sync if onboarding completed
             syncService.startAutoSync()
             await refreshUpcomingEvents()
@@ -88,6 +96,10 @@ final class AppState {
         upcomingEvents = await calendarService.getUpcomingEvents(limit: settings.maxMenuEvents)
     }
 
+    func refreshAvailableCalendars() async {
+        availableCalendarNames = await calendarService.getAvailableCalendarNames()
+    }
+
     // MARK: - Auth
 
     func authenticate() async {
@@ -98,9 +110,14 @@ final class AppState {
             try await authService.authenticate()
             isAuthenticated = true
             athleteName = await authService.getAthleteName()
+            Logger.app.info("Authentication successful")
+            FileLog.write("Authentication successful", category: "app")
         } catch AuthError.cancelled {
-            // User cancelled, don't show error
+            Logger.app.info("Authentication cancelled by user")
+            FileLog.write("Authentication cancelled by user", category: "app")
         } catch {
+            Logger.app.error("Authentication failed: \(error.localizedDescription)")
+            FileLog.write("Authentication failed: \(error.localizedDescription)", level: "ERROR", category: "app")
             errorMessage = error.localizedDescription
         }
 

@@ -51,8 +51,8 @@ struct GeneralSettingsView: View {
                 }
 
                 Picker("Calendar", selection: $settings.calendarName) {
-                    ForEach(availableCalendars, id: \.title) { calendar in
-                        Text(calendar.title).tag(calendar.title)
+                    ForEach(appState.availableCalendarNames, id: \.self) { name in
+                        Text(name).tag(name)
                     }
                 }
             }
@@ -77,12 +77,9 @@ struct GeneralSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-    }
-
-    private var availableCalendars: [EKCalendar] {
-        // Return available calendars from CalendarService
-        // For now, return empty and let the user type
-        []
+        .task {
+            await appState.refreshAvailableCalendars()
+        }
     }
 
     private var calendarStatusIcon: String {

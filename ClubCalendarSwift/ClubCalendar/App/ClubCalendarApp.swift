@@ -1,9 +1,15 @@
 import SwiftUI
 import AppKit
+import os
 
 @main
 struct ClubCalendarApp: App {
     @State private var appState = AppState()
+
+    init() {
+        Logger.app.info("Club Calendar launching")
+        FileLog.write("Club Calendar launching", category: "app")
+    }
 
     var body: some Scene {
         // Menu bar

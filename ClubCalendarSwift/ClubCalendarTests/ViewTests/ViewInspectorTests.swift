@@ -21,11 +21,12 @@ struct ViewInspectorTests {
         let view = EventRow(event: event)
         let inspected = try view.inspect()
 
-        // Find the text containing the title
+        // EventRow renders the time and title as a single Button label string
+        // (required for the NSMenu-backed MenuBarExtra), so assert on substring.
         let texts = inspected.findAll(ViewType.Text.self)
         let titleTexts = texts.compactMap { try? $0.string() }
 
-        #expect(titleTexts.contains("Morning Ride"))
+        #expect(titleTexts.contains { $0.contains("Morning Ride") })
     }
 
     @Test("EventRow displays time")
@@ -41,9 +42,14 @@ struct ViewInspectorTests {
         let view = EventRow(event: event)
         let inspected = try view.inspect()
 
-        // Should have at least 2 Text views (time and title)
+        // Single combined label "HH:mm  Title". Verify the formatted time
+        // substring appears in the rendered text.
         let texts = inspected.findAll(ViewType.Text.self)
-        #expect(texts.count >= 2)
+            .compactMap { try? $0.string() }
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        let expectedTime = formatter.string(from: fixedDate)
+        #expect(texts.contains { $0.contains(expectedTime) })
     }
 
     @Test("EventRow is a button")
@@ -176,8 +182,10 @@ struct ViewContentExtractionTests {
         let allTexts = inspected.findAll(ViewType.Text.self)
             .compactMap { try? $0.string() }
 
-        #expect(allTexts.count >= 2)  // Time and title
-        #expect(allTexts.contains("Extracted Event Title"))
+        // EventRow joins time + title into a single Button label, so check
+        // the title appears as a substring of one of the rendered strings.
+        #expect(!allTexts.isEmpty)
+        #expect(allTexts.contains { $0.contains("Extracted Event Title") })
     }
 
     @Test("Extract all text from ClubRow")

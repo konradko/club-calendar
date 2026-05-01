@@ -66,7 +66,6 @@ struct StravaAPIIntegrationTests {
         """
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
 
         let data = eventsJSON.data(using: .utf8)!
         let events = try decoder.decode([ClubEvent].self, from: data)
@@ -148,7 +147,6 @@ struct StravaAPIIntegrationTests {
         """
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
 
         let data = unicodeJSON.data(using: .utf8)!
         let event = try decoder.decode(ClubEvent.self, from: data)
@@ -168,7 +166,6 @@ struct StravaAPIIntegrationTests {
         """
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
 
         let data = eventsJSON.data(using: .utf8)!
         var events = try decoder.decode([ClubEvent].self, from: data)

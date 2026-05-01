@@ -37,6 +37,9 @@ enum KeychainError: Error, LocalizedError, Sendable {
 actor KeychainHelper {
     static let shared = KeychainHelper()
 
+    /// Shared service name groups all items under one keychain access prompt.
+    private let service = "com.clubcalendar.app"
+
     // MARK: - String Operations
 
     /// Saves a string value to the keychain.
@@ -67,13 +70,18 @@ actor KeychainHelper {
     func save(_ data: Data, for key: KeychainKey) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: key.rawValue,
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
         ]
 
-        // Try to delete existing item first
-        SecItemDelete(query as CFDictionary)
+        let deleteQuery: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key.rawValue
+        ]
+        SecItemDelete(deleteQuery as CFDictionary)
 
         let status = SecItemAdd(query as CFDictionary, nil)
         guard status == errSecSuccess else {
@@ -85,6 +93,7 @@ actor KeychainHelper {
     func getData(for key: KeychainKey) throws -> Data {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: key.rawValue,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
@@ -111,6 +120,7 @@ actor KeychainHelper {
     func delete(key: KeychainKey) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: key.rawValue
         ]
 
@@ -124,6 +134,7 @@ actor KeychainHelper {
     func exists(key: KeychainKey) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: key.rawValue,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]

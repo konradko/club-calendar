@@ -1,5 +1,7 @@
 import Foundation
 import Combine
+import AppKit
+import os
 
 /// Orchestrates syncing between Strava and Calendar.
 @MainActor
@@ -9,6 +11,7 @@ final class SyncService {
     private let calendarService: CalendarService
     private let settings: AppSettings
     private var syncTimer: Timer?
+    private var wakeObserver: NSObjectProtocol?
     private var isSyncing = false
 
     var lastSyncTime: Date?
@@ -42,6 +45,21 @@ final class SyncService {
             }
         }
 
+        // Foundation timers don't fire while the Mac is asleep; without this
+        // hook the app can sit idle for days after a wake. Trigger a sync as
+        // soon as the system reports it has woken up.
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                Logger.sync.info("System woke — triggering sync")
+                FileLog.write("System woke — triggering sync", category: "sync")
+                await self?.sync()
+            }
+        }
+
         // Run initial sync
         Task {
             await sync()
@@ -52,6 +70,10 @@ final class SyncService {
     func stopAutoSync() {
         syncTimer?.invalidate()
         syncTimer = nil
+        if let observer = wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            wakeObserver = nil
+        }
     }
 
     /// Restarts auto-sync (call when settings change).
@@ -64,44 +86,65 @@ final class SyncService {
     /// Performs a full sync of all enabled clubs.
     func sync() async {
         // Prevent concurrent syncs
-        guard !isSyncing else { return }
+        guard !isSyncing else {
+            Logger.sync.debug("Sync already in progress, skipping")
+            return
+        }
         isSyncing = true
         defer { isSyncing = false }
 
+        Logger.sync.info("Starting sync...")
+        FileLog.write("Starting sync...", category: "sync")
         lastSyncError = nil
 
         do {
             // Check calendar access
             let accessStatus = await calendarService.checkAccessStatus()
             guard accessStatus == .authorized else {
+                Logger.sync.error("Calendar access not authorized")
+                FileLog.write("Calendar access not authorized", level: "ERROR", category: "sync")
                 throw CalendarError.accessDenied
             }
 
             // Get enabled club IDs
             let clubIds = Array(settings.enabledClubIds)
             guard !clubIds.isEmpty else {
+                Logger.sync.info("No clubs enabled, nothing to sync")
+                FileLog.write("No clubs enabled, nothing to sync", category: "sync")
                 lastSyncResult = SyncResult(created: 0, updated: 0, cancelled: 0)
                 lastSyncTime = Date()
                 return
             }
 
+            Logger.sync.info("Fetching events for \(clubIds.count) club(s)")
+            FileLog.write("Fetching events for \(clubIds.count) club(s): \(clubIds)", category: "sync")
+
             // Fetch events from Strava
             let events = try await stravaService.getEventsForClubs(clubIds)
+            Logger.sync.info("Fetched \(events.count) event(s) from Strava")
+            FileLog.write("Fetched \(events.count) event(s) from Strava", category: "sync")
 
             // Sync to calendar
             let result = try await calendarService.syncEvents(events)
 
+            Logger.sync.info("Sync complete: \(result.summary)")
+            FileLog.write("Sync complete: \(result.summary)", category: "sync")
             lastSyncResult = result
             lastSyncTime = Date()
         } catch {
             lastSyncError = error
-            print("Sync failed: \(error)")
+            Logger.sync.error("Sync failed: \(error.localizedDescription)")
+            FileLog.write("Sync failed: \(error.localizedDescription)", level: "ERROR", category: "sync")
         }
     }
 
     /// Fetches clubs from Strava and updates settings.
     func refreshClubs() async throws {
+        Logger.sync.info("Refreshing clubs from Strava")
+        FileLog.write("Refreshing clubs from Strava", category: "sync")
         let clubs = try await stravaService.getAthleteClubs()
+        Logger.sync.info("Fetched \(clubs.count) club(s)")
+        FileLog.write("Fetched \(clubs.count) club(s)", category: "sync")
         settings.updateClubs(clubs)
     }
 

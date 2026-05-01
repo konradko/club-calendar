@@ -114,30 +114,8 @@ struct StravaServiceAPITests {
         }
         """
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let dateString = try container.decode(String.self)
-
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-
-            formatter.formatOptions = [.withInternetDateTime]
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "Cannot decode date: \(dateString)"
-            )
-        }
-
         let data = json.data(using: .utf8)!
-        let event = try decoder.decode(ClubEvent.self, from: data)
+        let event = try JSONDecoder().decode(ClubEvent.self, from: data)
 
         #expect(event.id == 1)
         #expect(event.title == "Test Event")
@@ -163,30 +141,8 @@ struct StravaServiceAPITests {
         }
         """
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let dateString = try container.decode(String.self)
-
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-
-            formatter.formatOptions = [.withInternetDateTime]
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "Cannot decode date: \(dateString)"
-            )
-        }
-
         let data = json.data(using: .utf8)!
-        let event = try decoder.decode(ClubEvent.self, from: data)
+        let event = try JSONDecoder().decode(ClubEvent.self, from: data)
 
         #expect(event.id == 2)
     }

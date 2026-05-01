@@ -209,12 +209,9 @@ struct ErrorPathTests {
         }
         """
 
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-
         let data = json.data(using: .utf8)!
         #expect(throws: Error.self) {
-            try decoder.decode(ClubEvent.self, from: data)
+            try JSONDecoder().decode(ClubEvent.self, from: data)
         }
     }
 

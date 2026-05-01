@@ -25,7 +25,6 @@ struct ClubEventTests {
         """
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
 
         let data = json.data(using: .utf8)!
         let event = try decoder.decode(ClubEvent.self, from: data)
@@ -38,6 +37,53 @@ struct ClubEventTests {
         #expect(event.address == "Central Park")
         #expect(event.privateEvent == false)
         #expect(event.organizingAthlete?.fullName == "John Doe")
+    }
+
+    @Test("Event decodes from real Strava API format")
+    func eventDecodesFromRealAPIFormat() throws {
+        let json = """
+        {
+            "id": 54321,
+            "resource_state": 2,
+            "title": "Morning Ride",
+            "description": "Join us for a morning ride",
+            "activity_type": "Ride",
+            "club": {
+                "id": 123,
+                "name": "BikeClub",
+                "sport_type": "cycling"
+            },
+            "organizing_athlete": {
+                "id": 111,
+                "firstname": "John",
+                "lastname": "Doe"
+            },
+            "upcoming_occurrences": [
+                "2025-01-25T10:00:00Z",
+                "2025-02-01T10:00:00Z"
+            ],
+            "zone": "Europe/Amsterdam",
+            "address": "Central Park",
+            "private": false,
+            "women_only": false,
+            "skill_levels": 1,
+            "terrain": 0
+        }
+        """
+
+        let data = json.data(using: .utf8)!
+        let event = try JSONDecoder().decode(ClubEvent.self, from: data)
+
+        #expect(event.id == 54321)
+        #expect(event.title == "Morning Ride")
+        #expect(event.clubName == "BikeClub")
+        #expect(event.clubId == 123)
+        #expect(event.description == "Join us for a morning ride")
+        #expect(event.activityType == "Ride")
+        #expect(event.address == "Central Park")
+        #expect(event.privateEvent == false)
+        #expect(event.organizingAthlete?.fullName == "John Doe")
+        #expect(event.stravaURL?.absoluteString == "https://www.strava.com/clubs/123/group_events/54321")
     }
 
     @Test("Activity emoji mapping", arguments: [
@@ -106,6 +152,7 @@ struct ClubEventTests {
             id: 12345,
             title: "Test",
             clubName: "Club",
+            clubId: 678,
             description: nil,
             activityType: nil,
             startDatetime: Date(),
@@ -115,7 +162,7 @@ struct ClubEventTests {
             routeId: nil
         )
 
-        #expect(event.stravaURL?.absoluteString == "https://www.strava.com/clubs/events/12345")
+        #expect(event.stravaURL?.absoluteString == "https://www.strava.com/clubs/678/group_events/12345")
     }
 
     @Test("Event with all fields")
@@ -140,7 +187,6 @@ struct ClubEventTests {
         """
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
 
         let data = json.data(using: .utf8)!
         let event = try decoder.decode(ClubEvent.self, from: data)
@@ -183,9 +229,7 @@ struct ClubEventTests {
         )
 
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
 
         let data = try encoder.encode(original)
         let decoded = try decoder.decode(ClubEvent.self, from: data)
@@ -217,9 +261,7 @@ struct ClubEventTests {
         )
 
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
 
         let data = try encoder.encode(original)
         let decoded = try decoder.decode(ClubEvent.self, from: data)
@@ -329,12 +371,12 @@ struct ClubEventTests {
 
         for id in testIDs {
             let event = ClubEvent(
-                id: id, title: "Test", clubName: "Club",
+                id: id, title: "Test", clubName: "Club", clubId: 42,
                 description: nil, activityType: nil,
                 startDatetime: Date(), address: nil,
                 privateEvent: nil, organizingAthlete: nil, routeId: nil
             )
-            #expect(event.stravaURL?.absoluteString == "https://www.strava.com/clubs/events/\(id)")
+            #expect(event.stravaURL?.absoluteString == "https://www.strava.com/clubs/42/group_events/\(id)")
         }
     }
 

@@ -15,13 +15,6 @@ repos:
       - id: check-merge-conflict
       - id: detect-private-key
 
-  # Python formatting and linting with ruff
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.8.6
-    hooks:
-      - id: ruff
-        args: [--fix]
-      - id: ruff-format
 
   # Shell script linting
   - repo: https://github.com/shellcheck-py/shellcheck-py

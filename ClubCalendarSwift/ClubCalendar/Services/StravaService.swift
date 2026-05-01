@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Errors from Strava API operations.
 enum StravaError: Error, LocalizedError, Sendable {
@@ -56,39 +57,20 @@ actor StravaService: StravaServiceProtocol {
     init(keychain: KeychainHelper = .shared, session: URLSessionProtocol = URLSession.shared) {
         self.keychain = keychain
         self.session = session
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let dateString = try container.decode(String.self)
-
-            // Try ISO8601 with fractional seconds
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-
-            // Try ISO8601 without fractional seconds
-            formatter.formatOptions = [.withInternetDateTime]
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "Cannot decode date: \(dateString)"
-            )
-        }
-        self.decoder = decoder
+        self.decoder = JSONDecoder()
     }
 
     // MARK: - Token Management
 
     /// Exchanges an authorization code for access/refresh tokens.
     func exchangeToken(code: String) async throws -> TokenResponse {
+        Logger.strava.info("Exchanging authorization code for tokens")
+        FileLog.write("Exchanging authorization code for tokens", category: "strava")
+
         guard let clientId = await keychain.getStringOrNil(for: .clientId),
               let clientSecret = await keychain.getStringOrNil(for: .clientSecret) else {
+            Logger.strava.error("No API credentials found in keychain")
+            FileLog.write("No API credentials found in keychain", level: "ERROR", category: "strava")
             throw StravaError.invalidCredentials
         }
 
@@ -120,6 +102,11 @@ actor StravaService: StravaServiceProtocol {
         if let athlete = tokenResponse.athlete {
             try await keychain.save(String(athlete.id), for: .athleteId)
             try await keychain.save(athlete.fullName, for: .athleteName)
+            Logger.strava.info("Token exchange successful, athlete: \(athlete.fullName)")
+            FileLog.write("Token exchange successful, athlete: \(athlete.fullName)", category: "strava")
+        } else {
+            Logger.strava.info("Token exchange successful")
+            FileLog.write("Token exchange successful", category: "strava")
         }
 
         return tokenResponse
@@ -127,12 +114,19 @@ actor StravaService: StravaServiceProtocol {
 
     /// Refreshes the access token using the refresh token.
     func refreshAccessToken() async throws -> String {
+        Logger.strava.info("Refreshing access token")
+        FileLog.write("Refreshing access token", category: "strava")
+
         guard let refreshToken = await keychain.getStringOrNil(for: .refreshToken) else {
+            Logger.strava.error("No refresh token available")
+            FileLog.write("No refresh token available", level: "ERROR", category: "strava")
             throw StravaError.noRefreshToken
         }
 
         guard let clientId = await keychain.getStringOrNil(for: .clientId),
               let clientSecret = await keychain.getStringOrNil(for: .clientSecret) else {
+            Logger.strava.error("No API credentials for token refresh")
+            FileLog.write("No API credentials for token refresh", level: "ERROR", category: "strava")
             throw StravaError.invalidCredentials
         }
 
@@ -160,6 +154,8 @@ actor StravaService: StravaServiceProtocol {
             expiresAt: Date(timeIntervalSince1970: TimeInterval(tokenResponse.expiresAt))
         )
 
+        Logger.strava.info("Access token refreshed successfully")
+        FileLog.write("Access token refreshed successfully", category: "strava")
         return tokenResponse.accessToken
     }
 
@@ -175,14 +171,31 @@ actor StravaService: StravaServiceProtocol {
 
     /// Fetches all clubs for the authenticated athlete.
     func getAthleteClubs() async throws -> [Club] {
+        Logger.strava.info("Fetching athlete clubs")
+        FileLog.write("GET /athlete/clubs", category: "strava")
         let url = baseURL.appendingPathComponent("athlete/clubs")
-        return try await authenticatedRequest(url: url)
+        let clubs: [Club] = try await authenticatedRequest(url: url)
+        Logger.strava.info("Fetched \(clubs.count) club(s)")
+        FileLog.write("Fetched \(clubs.count) club(s)", category: "strava")
+        return clubs
     }
 
     /// Fetches events for a specific club.
     func getClubEvents(clubId: Int) async throws -> [ClubEvent] {
+        Logger.strava.debug("Fetching events for club \(clubId)")
+        FileLog.write("GET /clubs/\(clubId)/group_events", category: "strava")
         let url = baseURL.appendingPathComponent("clubs/\(clubId)/group_events")
-        return try await authenticatedRequest(url: url)
+        let events: [ClubEvent] = try await authenticatedRequest(url: url)
+
+        // Strava's `upcoming_occurrences` can include today's already-passed
+        // start time for recurring events; drop anything that has already
+        // happened so it doesn't get (re-)created in the calendar.
+        let now = Date()
+        let upcoming = events.filter { $0.startDatetime >= now }
+
+        Logger.strava.debug("Club \(clubId): \(upcoming.count) upcoming event(s) (\(events.count - upcoming.count) past skipped)")
+        FileLog.write("Club \(clubId): \(upcoming.count) upcoming event(s) (\(events.count - upcoming.count) past skipped)", category: "strava")
+        return upcoming
     }
 
     /// Fetches events for multiple clubs.
@@ -194,8 +207,8 @@ actor StravaService: StravaServiceProtocol {
                 let events = try await getClubEvents(clubId: clubId)
                 allEvents.append(contentsOf: events)
             } catch {
-                // Log but continue with other clubs
-                print("Failed to fetch events for club \(clubId): \(error)")
+                Logger.strava.error("Failed to fetch events for club \(clubId): \(error.localizedDescription)")
+                FileLog.write("Failed to fetch events for club \(clubId): \(error.localizedDescription)", level: "ERROR", category: "strava")
             }
         }
 
@@ -218,6 +231,10 @@ actor StravaService: StravaServiceProtocol {
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
+            let bodyPreview = String(data: data.prefix(1000), encoding: .utf8) ?? "<binary>"
+            Logger.strava.error("Decoding failed for \(url.lastPathComponent): \(error.localizedDescription)")
+            FileLog.write("Decoding failed for \(url.path): \(error)", level: "ERROR", category: "strava")
+            FileLog.write("Response body: \(bodyPreview)", level: "DEBUG", category: "strava")
             throw StravaError.decodingError(underlying: error)
         }
     }
@@ -226,6 +243,8 @@ actor StravaService: StravaServiceProtocol {
         do {
             return try await session.data(for: request)
         } catch {
+            Logger.strava.error("Network request failed: \(error.localizedDescription)")
+            FileLog.write("Network request failed: \(request.url?.absoluteString ?? "unknown") - \(error.localizedDescription)", level: "ERROR", category: "strava")
             throw StravaError.networkError(underlying: error)
         }
     }
@@ -235,18 +254,28 @@ actor StravaService: StravaServiceProtocol {
             throw StravaError.invalidResponse
         }
 
-        switch httpResponse.statusCode {
+        let statusCode = httpResponse.statusCode
+        Logger.strava.debug("HTTP \(statusCode)")
+        FileLog.write("HTTP \(statusCode)", level: "DEBUG", category: "strava")
+
+        switch statusCode {
         case 200...299:
             return
         case 401:
+            Logger.strava.error("Auth required (HTTP 401)")
+            FileLog.write("Auth required (HTTP 401)", level: "ERROR", category: "strava")
             throw StravaError.authRequired
         case 429:
             let resetTime = httpResponse.value(forHTTPHeaderField: "X-RateLimit-Reset")
                 .flatMap { Double($0) }
                 .map { Date(timeIntervalSince1970: $0) }
+            Logger.strava.error("Rate limited (HTTP 429)")
+            FileLog.write("Rate limited (HTTP 429)", level: "ERROR", category: "strava")
             throw StravaError.rateLimited(resetTime: resetTime)
         default:
-            throw StravaError.serverError(statusCode: httpResponse.statusCode)
+            Logger.strava.error("Server error (HTTP \(statusCode))")
+            FileLog.write("Server error (HTTP \(statusCode))", level: "ERROR", category: "strava")
+            throw StravaError.serverError(statusCode: statusCode)
         }
     }
 }

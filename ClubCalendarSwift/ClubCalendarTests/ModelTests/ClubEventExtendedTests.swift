@@ -123,7 +123,7 @@ struct ClubEventExtendedTests {
 
         let url = event.stravaURL
         #expect(url?.host?.contains("strava.com") == true)
-        #expect(url?.path.contains("/clubs/events/") == true)
+        #expect(url?.path.contains("/group_events/") == true)
         #expect(url?.path.hasSuffix("/42") == true)
     }
 
@@ -331,28 +331,8 @@ struct ClubEventExtendedTests {
     func clubEventMinimalRoundTrip() throws {
         let original = createEvent(id: 1, title: "Test", clubName: "Club")
 
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let dateString = try container.decode(String.self)
-
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime]
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "Cannot decode date"
-            )
-        }
-
-        let data = try encoder.encode(original)
-        let decoded = try decoder.decode(ClubEvent.self, from: data)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(ClubEvent.self, from: data)
 
         #expect(decoded.id == original.id)
         #expect(decoded.title == original.title)
@@ -375,28 +355,8 @@ struct ClubEventExtendedTests {
             routeId: 67890
         )
 
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .custom { decoder in
-            let container = try decoder.singleValueContainer()
-            let dateString = try container.decode(String.self)
-
-            let formatter = ISO8601DateFormatter()
-            formatter.formatOptions = [.withInternetDateTime]
-            if let date = formatter.date(from: dateString) {
-                return date
-            }
-
-            throw DecodingError.dataCorruptedError(
-                in: container,
-                debugDescription: "Cannot decode date"
-            )
-        }
-
-        let data = try encoder.encode(original)
-        let decoded = try decoder.decode(ClubEvent.self, from: data)
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(ClubEvent.self, from: data)
 
         #expect(decoded.id == original.id)
         #expect(decoded.title == original.title)

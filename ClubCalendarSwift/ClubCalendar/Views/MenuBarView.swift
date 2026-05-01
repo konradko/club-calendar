@@ -1,10 +1,17 @@
 import SwiftUI
+import os
 
 struct MenuBarView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
+        // Drop events whose start has already passed so a stale cache
+        // (e.g. when auto-sync hasn't run for a while because the Mac was
+        // asleep) doesn't surface yesterday's rides in the menu.
+        let now = Date()
+        let upcoming = appState.upcomingEvents.filter { $0.startDate >= now }
+
         Group {
             // Warning banner if needed
             if let warning = warningMessage {
@@ -14,8 +21,8 @@ struct MenuBarView: View {
             }
 
             // Upcoming events
-            if appState.settings.showUpcomingEvents && !appState.upcomingEvents.isEmpty {
-                eventsSection
+            if appState.settings.showUpcomingEvents && !upcoming.isEmpty {
+                eventsSection(upcoming)
                 Divider()
             }
 
@@ -29,6 +36,10 @@ struct MenuBarView: View {
                 openSettings()
             }
             .keyboardShortcut(",", modifiers: .command)
+
+            Button("View Logs...") {
+                FileLog.openLogFile()
+            }
 
             Button("Quit Club Calendar") {
                 NSApplication.shared.terminate(nil)
@@ -55,8 +66,8 @@ struct MenuBarView: View {
     // MARK: - Events Section
 
     @ViewBuilder
-    private var eventsSection: some View {
-        let groupedEvents = groupEventsByDay(appState.upcomingEvents)
+    private func eventsSection(_ events: [UpcomingEvent]) -> some View {
+        let groupedEvents = groupEventsByDay(events)
 
         ForEach(groupedEvents, id: \.date) { group in
             Text(formatDayHeader(group.date))
@@ -135,20 +146,8 @@ struct EventRow: View {
     let event: UpcomingEvent
 
     var body: some View {
-        Button {
+        Button("\(timeString)  \(event.title)") {
             openInCalendar()
-        } label: {
-            HStack {
-                Text(timeString)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 45, alignment: .leading)
-
-                Text(event.title)
-                    .lineLimit(1)
-
-                Spacer()
-            }
         }
     }
 
@@ -159,9 +158,6 @@ struct EventRow: View {
     }
 
     private func openInCalendar() {
-        // Open Calendar.app
-        if let url = URL(string: "x-apple-calendar://") {
-            NSWorkspace.shared.open(url)
-        }
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Calendar.app"))
     }
 }

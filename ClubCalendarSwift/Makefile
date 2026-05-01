@@ -57,7 +57,7 @@ clean:
 	rm -rf $(APP_NAME).dmg
 
 # Create debug app bundle
-bundle-debug: build-debug
+bundle-debug: build-debug setup-cert
 	@echo "Creating debug app bundle..."
 	@mkdir -p "$(APP_PATH_DEBUG)/Contents/MacOS"
 	@mkdir -p "$(APP_PATH_DEBUG)/Contents/Resources"
@@ -94,6 +94,7 @@ dmg: sign
 	@rm -f $(APP_NAME).dmg
 	hdiutil create -volname "$(APP_NAME)" -srcfolder "$(APP_PATH_RELEASE)" -ov -format UDZO "$(APP_NAME).dmg"
 	@echo "DMG created: $(APP_NAME).dmg"
+	open /Users/konrad/workspace/club-calendar/ClubCalendarSwift/ClubCalendar.dmg
 
 # Full release build
 release: clean dmg

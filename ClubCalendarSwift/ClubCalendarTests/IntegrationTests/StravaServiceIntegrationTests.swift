@@ -95,7 +95,6 @@ struct StravaServiceIntegrationTests {
         """
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
 
         let data = json.data(using: .utf8)!
         let events = try decoder.decode([ClubEvent].self, from: data)
@@ -130,7 +129,6 @@ struct StravaServiceIntegrationTests {
         """
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
 
         let data = json.data(using: .utf8)!
         let event = try decoder.decode(ClubEvent.self, from: data)
@@ -141,7 +139,7 @@ struct StravaServiceIntegrationTests {
         #expect(event.privateEvent == true)
         #expect(event.organizingAthlete?.fullName == "Organizer Person")
         #expect(event.routeId == 12345)
-        #expect(event.stravaURL?.absoluteString == "https://www.strava.com/clubs/events/99999")
+        #expect(event.stravaURL?.absoluteString == "https://www.strava.com/clubs/0/group_events/99999")
         #expect(event.formattedTitle == "🚴 Full Club: Complete Event")
     }
 
@@ -157,7 +155,6 @@ struct StravaServiceIntegrationTests {
         """
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
 
         let data = json.data(using: .utf8)!
         let event = try decoder.decode(ClubEvent.self, from: data)
@@ -277,7 +274,6 @@ struct StravaServiceIntegrationTests {
         """
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
 
         // Standard ISO8601 should work
         let data2 = jsonWithoutFractionalSeconds.data(using: .utf8)!
