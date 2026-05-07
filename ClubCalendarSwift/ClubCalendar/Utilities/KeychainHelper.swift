@@ -40,6 +40,19 @@ actor KeychainHelper {
     /// Shared service name groups all items under one keychain access prompt.
     private let service = "com.clubcalendar.app"
 
+    /// Base query attributes shared by every keychain operation.
+    ///
+    /// `kSecUseDataProtectionKeychain: true` opts into the modern data-protection
+    /// keychain on macOS, which gates access by the `keychain-access-groups`
+    /// entitlement instead of per-item ACL prompts.
+    private var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecUseDataProtectionKeychain as String: true
+        ]
+    }
+
     // MARK: - String Operations
 
     /// Saves a string value to the keychain.
@@ -68,19 +81,13 @@ actor KeychainHelper {
 
     /// Saves data to the keychain.
     func save(_ data: Data, for key: KeychainKey) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key.rawValue,
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock
-        ]
+        var query = baseQuery
+        query[kSecAttrAccount as String] = key.rawValue
+        query[kSecValueData as String] = data
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
 
-        let deleteQuery: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key.rawValue
-        ]
+        var deleteQuery = baseQuery
+        deleteQuery[kSecAttrAccount as String] = key.rawValue
         SecItemDelete(deleteQuery as CFDictionary)
 
         let status = SecItemAdd(query as CFDictionary, nil)
@@ -91,13 +98,10 @@ actor KeychainHelper {
 
     /// Retrieves data from the keychain.
     func getData(for key: KeychainKey) throws -> Data {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key.rawValue,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
+        var query = baseQuery
+        query[kSecAttrAccount as String] = key.rawValue
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
 
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -118,11 +122,8 @@ actor KeychainHelper {
 
     /// Deletes an item from the keychain.
     func delete(key: KeychainKey) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key.rawValue
-        ]
+        var query = baseQuery
+        query[kSecAttrAccount as String] = key.rawValue
 
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
@@ -132,12 +133,9 @@ actor KeychainHelper {
 
     /// Checks if a key exists in the keychain.
     func exists(key: KeychainKey) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key.rawValue,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
+        var query = baseQuery
+        query[kSecAttrAccount as String] = key.rawValue
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
 
         let status = SecItemCopyMatching(query as CFDictionary, nil)
         return status == errSecSuccess
