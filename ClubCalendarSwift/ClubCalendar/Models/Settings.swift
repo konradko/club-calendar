@@ -52,24 +52,16 @@ final class AppSettings {
     @ObservationIgnored
     @AppStorage("onboardingCompleted") var onboardingCompleted: Bool = false
 
-    /// JSON-encoded array of SyncableClub for persistence.
-    @ObservationIgnored
-    @AppStorage("syncableClubsData") private var syncableClubsData: Data = Data()
+    private static let syncableClubsKey = "syncableClubsData"
+
+    /// The clubs available for syncing with their enabled state.
+    var syncableClubs: [SyncableClub] {
+        didSet { persistSyncableClubs() }
+    }
 
     var syncInterval: SyncInterval {
         get { SyncInterval(rawValue: syncIntervalMinutes) ?? .oneHour }
         set { syncIntervalMinutes = newValue.rawValue }
-    }
-
-    /// The clubs available for syncing with their enabled state.
-    var syncableClubs: [SyncableClub] {
-        get {
-            guard !syncableClubsData.isEmpty else { return [] }
-            return (try? JSONDecoder().decode([SyncableClub].self, from: syncableClubsData)) ?? []
-        }
-        set {
-            syncableClubsData = (try? JSONEncoder().encode(newValue)) ?? Data()
-        }
     }
 
     /// IDs of clubs that are enabled for syncing.
@@ -87,12 +79,22 @@ final class AppSettings {
 
     /// Sets the enabled state for a specific club.
     func setClubEnabled(_ clubId: Int, enabled: Bool) {
-        var clubs = syncableClubs
-        if let index = clubs.firstIndex(where: { $0.id == clubId }) {
-            clubs[index].isEnabled = enabled
-            syncableClubs = clubs
+        if let index = syncableClubs.firstIndex(where: { $0.id == clubId }) {
+            syncableClubs[index].isEnabled = enabled
         }
     }
 
-    private init() {}
+    private func persistSyncableClubs() {
+        let data = (try? JSONEncoder().encode(syncableClubs)) ?? Data()
+        UserDefaults.standard.set(data, forKey: Self.syncableClubsKey)
+    }
+
+    private init() {
+        if let data = UserDefaults.standard.data(forKey: Self.syncableClubsKey),
+           let clubs = try? JSONDecoder().decode([SyncableClub].self, from: data) {
+            self.syncableClubs = clubs
+        } else {
+            self.syncableClubs = []
+        }
+    }
 }
