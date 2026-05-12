@@ -12,6 +12,7 @@ final class SyncService {
     private let settings: AppSettings
     private var syncTimer: Timer?
     private var wakeObserver: NSObjectProtocol?
+    private var activityToken: NSObjectProtocol?
     private var isSyncing = false
 
     var lastSyncTime: Date?
@@ -38,12 +39,25 @@ final class SyncService {
         let interval = settings.syncInterval
         guard interval != .never else { return }
 
+        // App Nap throttles Foundation timers on idle LSUIElement apps, so a
+        // menu bar app left untouched for hours stops firing its sync timer.
+        // Holding a user-initiated activity tells macOS we're doing periodic
+        // work that must run on schedule (system sleep is still allowed).
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "Club Calendar periodic Strava sync"
+        )
+
         let intervalSeconds = TimeInterval(interval.rawValue * 60)
-        syncTimer = Timer.scheduledTimer(withTimeInterval: intervalSeconds, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: intervalSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 await self?.sync()
             }
         }
+        // .common keeps the timer firing while menus / modal panels are open
+        // (those run loop modes would otherwise pause a .default-mode timer).
+        RunLoop.main.add(timer, forMode: .common)
+        syncTimer = timer
 
         // Foundation timers don't fire while the Mac is asleep; without this
         // hook the app can sit idle for days after a wake. Trigger a sync as
@@ -73,6 +87,10 @@ final class SyncService {
         if let observer = wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             wakeObserver = nil
+        }
+        if let token = activityToken {
+            ProcessInfo.processInfo.endActivity(token)
+            activityToken = nil
         }
     }
 
