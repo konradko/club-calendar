@@ -88,11 +88,17 @@ sign: bundle setup-cert
 	codesign --force --deep --sign $(call get_sign_identity) --entitlements $(ENTITLEMENTS) "$(APP_PATH_RELEASE)"
 	@echo "App signed successfully"
 
-# Create DMG installer
+# Create DMG installer with an /Applications shortcut for drag-install
+DMG_STAGING = .build/dmg-staging
 dmg: sign
 	@echo "Creating DMG..."
 	@rm -f $(APP_NAME).dmg
-	hdiutil create -volname "$(APP_NAME)" -srcfolder "$(APP_PATH_RELEASE)" -ov -format UDZO "$(APP_NAME).dmg"
+	@rm -rf "$(DMG_STAGING)"
+	@mkdir -p "$(DMG_STAGING)"
+	@cp -R "$(APP_PATH_RELEASE)" "$(DMG_STAGING)/"
+	@ln -s /Applications "$(DMG_STAGING)/Applications"
+	hdiutil create -volname "$(APP_NAME)" -srcfolder "$(DMG_STAGING)" -ov -format UDZO "$(APP_NAME).dmg"
+	@rm -rf "$(DMG_STAGING)"
 	@echo "DMG created: $(APP_NAME).dmg"
 	open /Users/konrad/workspace/club-calendar/ClubCalendarSwift/ClubCalendar.dmg
 
