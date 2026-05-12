@@ -42,14 +42,16 @@ actor KeychainHelper {
 
     /// Base query attributes shared by every keychain operation.
     ///
-    /// `kSecUseDataProtectionKeychain: true` opts into the modern data-protection
-    /// keychain on macOS, which gates access by the `keychain-access-groups`
-    /// entitlement instead of per-item ACL prompts.
+    /// The data-protection keychain is gated by the `keychain-access-groups`
+    /// entitlement, which on macOS 26+ requires a provisioning profile (i.e.
+    /// an Apple Developer Team ID). Self-signed dev builds have no such
+    /// profile, so AMFI rejects launch with "no matching profile found".
+    /// We use the legacy file keychain instead — ACL prompts only fire when
+    /// the signing identity changes, and the dev cert is stable.
     private var baseQuery: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecUseDataProtectionKeychain as String: true
+            kSecAttrService as String: service
         ]
     }
 
