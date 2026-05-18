@@ -1,104 +1,89 @@
 <p align="center">
-  <img src="icon.svg" alt="Club Calendar" width="128" height="128">
+  <img src="icon/icon.svg" alt="Club Calendar" width="128" height="128">
 </p>
 
 # Club Calendar
 
 A macOS menu bar app that syncs your Strava club events to Apple Calendar.
 
+Native SwiftUI, no background daemons, no third-party runtime dependencies.
+
 ## Features
 
-- Syncs events from all your Strava clubs
-- Native Apple Calendar integration
-- Auto-sync in the background (configurable interval)
-- Filter clubs by city
-- Flood protection (limit events per club)
+- Mirrors events from all your Strava clubs into a dedicated calendar
+- Native EventKit integration; events open in Apple Calendar or on Strava
+- Auto-sync on a configurable interval, with wake-from-sleep catch-up
+- Per-club enable/disable in Settings
+- Self-healing dedup of events created by previous syncs
 
 ## Installation
 
-### Download DMG
+### Download
 
-Download the latest release from the [Releases](https://github.com/your-repo/club-calendar/releases) page.
+Grab the latest DMG from [Releases](https://github.com/konradko/club-calendar/releases), open it, drag **Club Calendar** to Applications, and launch.
 
-1. Open the DMG
-2. Drag "Club Calendar" to Applications
-3. Open from Applications (look for the icon in your menu bar)
-
-### Build from Source
+### Build from source
 
 ```bash
-git clone <repo>
-cd club-calendar
-make install
+git clone https://github.com/konradko/club-calendar
+cd club-calendar/ClubCalendarSwift
 make dmg
 ```
 
+Requires macOS 26+ and Swift 6.2 (Xcode 26).
+
 ## Setup
 
-1. **Get Strava API credentials:**
-   - Go to [strava.com/settings/api](https://www.strava.com/settings/api)
-   - Create an application (use `localhost` for callback URL)
-   - Note your **Client ID** and **Client Secret**
+1. **Get Strava API credentials** at [strava.com/settings/api](https://www.strava.com/settings/api). Use `clubcalendar://callback` as the Authorization Callback Domain (or `localhost` if Strava demands a bare hostname — both work in practice; see auth notes below). Note your Client ID and Client Secret.
+2. **Launch the app** — onboarding will walk you through entering credentials, authenticating with Strava, picking clubs to sync, and granting Calendar access.
 
-2. **Configure the app:**
-   - Click the menu bar icon
-   - Select "Edit config..." to add your credentials
-   - Click "Authenticate with Strava..."
-   - Click "Sync Now" to fetch your clubs and events
+Credentials and OAuth tokens are stored in the macOS Keychain (data-protection-style legacy file keychain — see [keychain notes](#why-the-legacy-file-keychain)).
 
-## Configuration
+## Project layout
 
-Config file location: `~/Library/Application Support/Club Calendar/config.yaml`
-
-```yaml
-# Strava credentials
-strava_client_id: "your_client_id"
-strava_client_secret: "your_client_secret"
-
-# City filter (auto-enable clubs in these cities)
-cities:
-  - London
-  - Manchester
-
-# Sync settings
-sync_interval_minutes: 60  # 0 = disabled
-sync_weeks: 8              # How far ahead to sync
-max_events_per_club_per_week: 10
-
-# Clubs (populated after first sync)
-clubs:
-  123456:
-    name: "My Running Club"
-    city: "London"
-    enabled: true
 ```
+ClubCalendarSwift/
+├── ClubCalendar/
+│   ├── App/         # ClubCalendarApp (SwiftUI @main), AppState
+│   ├── Models/      # Club, ClubEvent, Settings
+│   ├── Services/    # StravaService, CalendarService, AuthService, SyncService, KeychainHelper
+│   ├── Views/       # MenuBarView, SettingsView (+ subviews), OnboardingView
+│   ├── Utilities/   # Logger, ActivityEmoji
+│   └── Resources/   # Icons, entitlements
+├── ClubCalendarTests/
+└── Makefile         # build / bundle / sign / dmg / dev / test
+```
+
+## Architecture
+
+```
+ClubCalendarApp (SwiftUI @main)
+  └── AppState (@MainActor @Observable — composition root + UI state)
+        ├── KeychainHelper          ← legacy file keychain, kSecAttrAccessibleAfterFirstUnlock
+        ├── AppSettings             ← @AppStorage + JSON-encoded clubs
+        ├── StravaService (actor)   ← HTTPS to api.strava.com
+        ├── CalendarService (actor) ← EventKit
+        ├── AuthService             ← ASWebAuthenticationSession (clubcalendar://callback)
+        └── SyncService             ← NSBackgroundActivityScheduler + wake notification
+```
+
+Sync flow: `SyncService.sync()` → `StravaService.getEventsForClubs(...)` (parallel per club) → `CalendarService.syncEvents(...)` (dedup by Strava ID embedded in `EKEvent.url`, mark removed future events `[CANCELLED]`).
 
 ## Development
 
 ```bash
-# Install dependencies
-make install
-
-# Run with hot reload and mock Strava server
-make dev
-# Run tests
-make test
-
-# Build DMG
-make dmg
+make dev      # build debug, bundle, sign, open
+make test     # run XCTest / swift-testing suite
+make restart  # kill, rebuild, reopen
+make logs     # stream unified logs (subsystem com.clubcalendar.app)
+make dmg      # signed release DMG with /Applications shortcut
 ```
 
-## Project Structure
+The dev signing cert is created locally by `scripts/create-dev-cert.sh` — `make setup-cert` regenerates it. Keychain ACLs are tied to the signing identity, so a stable dev cert means no repeated keychain prompts.
 
-```
-club-calendar/
-├── src/club_calendar/
-│   ├── core/           # Pure Python logic (strava, service, models)
-│   └── menubar/        # macOS-specific (app, config, eventkit, utils)
-├── tests/              # All tests (unified)
-├── deploy/             # Build scripts (dmg, icons)
-└── Makefile
-```
+### Why the legacy file keychain
+
+On macOS 26 the data-protection keychain (`keychain-access-groups` entitlement) requires a provisioning profile, which self-signed dev builds don't have. We use the legacy file keychain instead. See `KeychainHelper.swift` for details.
 
 ## License
 

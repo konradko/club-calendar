@@ -2,43 +2,50 @@ import Foundation
 @testable import ClubCalendar
 
 /// Mock keychain helper for testing services without actual keychain access.
-actor MockKeychainHelper: KeychainHelperProtocol {
+final class MockKeychainHelper: KeychainHelperProtocol, @unchecked Sendable {
+    private let lock = NSLock()
     private var storage: [String: String] = [:]
     private var dataStorage: [String: Data] = [:]
 
     func save(_ value: String, for key: KeychainKey) throws {
-        storage[key.rawValue] = value
+        lock.withLock { storage[key.rawValue] = value }
     }
 
     func getString(for key: KeychainKey) throws -> String {
-        guard let value = storage[key.rawValue] else {
-            throw KeychainError.itemNotFound
+        try lock.withLock {
+            guard let value = storage[key.rawValue] else {
+                throw KeychainError.itemNotFound
+            }
+            return value
         }
-        return value
     }
 
     func getStringOrNil(for key: KeychainKey) -> String? {
-        storage[key.rawValue]
+        lock.withLock { storage[key.rawValue] }
     }
 
     func save(_ data: Data, for key: KeychainKey) throws {
-        dataStorage[key.rawValue] = data
+        lock.withLock { dataStorage[key.rawValue] = data }
     }
 
     func getData(for key: KeychainKey) throws -> Data {
-        guard let data = dataStorage[key.rawValue] else {
-            throw KeychainError.itemNotFound
+        try lock.withLock {
+            guard let data = dataStorage[key.rawValue] else {
+                throw KeychainError.itemNotFound
+            }
+            return data
         }
-        return data
     }
 
     func delete(key: KeychainKey) throws {
-        storage.removeValue(forKey: key.rawValue)
-        dataStorage.removeValue(forKey: key.rawValue)
+        lock.withLock {
+            storage.removeValue(forKey: key.rawValue)
+            dataStorage.removeValue(forKey: key.rawValue)
+        }
     }
 
     func exists(key: KeychainKey) -> Bool {
-        storage[key.rawValue] != nil
+        lock.withLock { storage[key.rawValue] != nil }
     }
 
     func saveTokens(accessToken: String, refreshToken: String, expiresAt: Date) throws {
@@ -79,7 +86,10 @@ actor MockKeychainHelper: KeychainHelperProtocol {
     }
 
     func clearAll() throws {
-        storage.removeAll()
+        lock.withLock {
+            storage.removeAll()
+            dataStorage.removeAll()
+        }
     }
 
     func hasAPICredentials() -> Bool {

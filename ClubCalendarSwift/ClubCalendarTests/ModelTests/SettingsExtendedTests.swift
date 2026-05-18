@@ -438,16 +438,4 @@ struct SettingsExtendedTests {
         settings.onboardingCompleted = originalValue
     }
 
-    @Test("AppSettings startAtLogin can be toggled")
-    @MainActor
-    func appSettingsStartAtLogin() {
-        let settings = AppSettings.shared
-        let originalValue = settings.startAtLogin
-
-        settings.startAtLogin = !originalValue
-        #expect(settings.startAtLogin == !originalValue)
-
-        // Restore original
-        settings.startAtLogin = originalValue
-    }
 }

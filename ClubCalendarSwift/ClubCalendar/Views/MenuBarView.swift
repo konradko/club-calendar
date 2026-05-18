@@ -38,7 +38,7 @@ struct MenuBarView: View {
             .keyboardShortcut(",", modifiers: .command)
 
             Button("View Logs...") {
-                FileLog.openLogFile()
+                LogViewer.openRecentLogs()
             }
 
             Button("Quit Club Calendar") {
@@ -127,16 +127,15 @@ struct MenuBarView: View {
 
     private func formatDayHeader(_ date: Date) -> String {
         let calendar = Calendar.current
-
         if calendar.isDateInToday(date) {
             return "Today"
-        } else if calendar.isDateInTomorrow(date) {
-            return "Tomorrow"
-        } else {
-            let formatter = DateFormatter()
-            formatter.dateFormat = "EEE, d MMM"
-            return formatter.string(from: date)
         }
+        if calendar.isDateInTomorrow(date) {
+            return "Tomorrow"
+        }
+        return date.formatted(
+            .dateTime.weekday(.abbreviated).day().month(.abbreviated)
+        )
     }
 }
 
@@ -147,17 +146,19 @@ struct EventRow: View {
 
     var body: some View {
         Button("\(timeString)  \(event.title)") {
-            openInCalendar()
+            openEvent()
         }
     }
 
     private var timeString: String {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter.string(from: event.startDate)
+        event.startDate.formatted(date: .omitted, time: .shortened)
     }
 
-    private func openInCalendar() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Calendar.app"))
+    private func openEvent() {
+        if let url = event.url {
+            NSWorkspace.shared.open(url)
+        } else {
+            NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Calendar.app"))
+        }
     }
 }

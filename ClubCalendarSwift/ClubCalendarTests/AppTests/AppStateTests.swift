@@ -176,20 +176,6 @@ struct AppStateTests {
         #expect(appState.showOnboarding == false)
     }
 
-    // MARK: - Error State Tests
-
-    @Test("AppState clears error when new operation starts")
-    func appStateClearsErrorOnNewOperation() async {
-        let appState = AppState()
-        appState.errorMessage = "Previous error"
-
-        // Call authenticate which should clear error
-        await appState.authenticate()
-
-        // Error might be set again by the operation, but the old error is cleared
-        // (The actual authenticate will fail due to no credentials, but that's expected)
-    }
-
     // MARK: - Sendable Conformance
 
     @Test("AppState state changes are isolated to MainActor")

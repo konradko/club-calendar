@@ -1,32 +1,32 @@
 import Foundation
 import AppKit
-import Network
+import AuthenticationServices
 import os
 
-/// Handles OAuth authentication with Strava using localhost callback.
+/// Handles OAuth authentication with Strava via ASWebAuthenticationSession.
 @MainActor
-final class AuthService {
+final class AuthService: NSObject {
     private let keychain: KeychainHelper
     private let stravaService: StravaService
-    private let callbackPort: UInt16 = 51678
-    private var listener: NWListener?
-    private var authContinuation: CheckedContinuation<String, Error>?
+    private let callbackScheme = "clubcalendar"
+    private var session: ASWebAuthenticationSession?
 
     init(keychain: KeychainHelper = .shared, stravaService: StravaService) {
         self.keychain = keychain
         self.stravaService = stravaService
+        super.init()
     }
 
     /// The OAuth authorization URL for Strava.
-    private func authorizationURL() async -> URL? {
-        guard let clientId = await keychain.getStringOrNil(for: .clientId) else {
+    private func authorizationURL() -> URL? {
+        guard let clientId = keychain.getStringOrNil(for: .clientId) else {
             return nil
         }
 
         var components = URLComponents(string: "https://www.strava.com/oauth/authorize")!
         components.queryItems = [
             URLQueryItem(name: "client_id", value: clientId),
-            URLQueryItem(name: "redirect_uri", value: "http://localhost:\(callbackPort)/callback"),
+            URLQueryItem(name: "redirect_uri", value: "\(callbackScheme)://callback"),
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "scope", value: "read,activity:read,read_all"),
             URLQueryItem(name: "approval_prompt", value: "auto")
@@ -34,189 +34,94 @@ final class AuthService {
         return components.url
     }
 
-    /// Starts the OAuth flow by opening browser and listening for callback.
+    /// Starts the OAuth flow using ASWebAuthenticationSession.
     func authenticate() async throws {
         Logger.auth.info("Starting OAuth authentication flow")
-        FileLog.write("Starting OAuth authentication flow", category: "auth")
 
-        guard let url = await authorizationURL() else {
+        guard let url = authorizationURL() else {
             Logger.auth.error("No API credentials configured")
-            FileLog.write("No API credentials configured", level: "ERROR", category: "auth")
             throw AuthError.noCredentials
         }
 
-        // Get the auth code via localhost callback
-        let code = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-            self.authContinuation = continuation
+        let callbackURL = try await startWebAuthSession(authURL: url)
 
-            // Start local server to receive callback
-            do {
-                try startCallbackServer()
-                Logger.auth.info("Callback server started on port \(self.callbackPort)")
-                FileLog.write("Callback server started on port \(self.callbackPort)", category: "auth")
-            } catch {
-                Logger.auth.error("Failed to start callback server: \(error.localizedDescription)")
-                FileLog.write("Failed to start callback server: \(error.localizedDescription)", level: "ERROR", category: "auth")
-                continuation.resume(throwing: AuthError.failedToStart)
-                return
-            }
+        guard let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false) else {
+            throw AuthError.noCallbackURL
+        }
 
-            // Open browser for authentication
-            NSWorkspace.shared.open(url)
-            Logger.auth.info("Opened browser for Strava authorization")
-            FileLog.write("Opened browser for Strava authorization", category: "auth")
+        if let stravaError = components.queryItems?.first(where: { $0.name == "error" })?.value {
+            throw AuthError.stravaError(stravaError)
+        }
+
+        guard let code = components.queryItems?.first(where: { $0.name == "code" })?.value else {
+            throw AuthError.noAuthCode
         }
 
         Logger.auth.info("Received authorization code, exchanging for tokens")
-        FileLog.write("Received authorization code, exchanging for tokens", category: "auth")
-
-        // Exchange code for tokens
         _ = try await stravaService.exchangeToken(code: code)
-
         Logger.auth.info("Authentication complete")
-        FileLog.write("Authentication complete", category: "auth")
     }
 
-    /// Starts a local HTTP server to receive the OAuth callback.
-    private func startCallbackServer() throws {
-        let parameters = NWParameters.tcp
-        parameters.allowLocalEndpointReuse = true
-
-        listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: callbackPort)!)
-
-        listener?.stateUpdateHandler = { [weak self] state in
-            switch state {
-            case .failed(let error):
-                Logger.auth.error("Callback listener failed: \(error.localizedDescription)")
-                FileLog.write("Callback listener failed: \(error.localizedDescription)", level: "ERROR", category: "auth")
-                Task { @MainActor in
-                    self?.authContinuation?.resume(throwing: AuthError.failedToStart)
-                    self?.authContinuation = nil
+    private func startWebAuthSession(authURL: URL) async throws -> URL {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+            let session = ASWebAuthenticationSession(
+                url: authURL,
+                callbackURLScheme: callbackScheme
+            ) { callbackURL, error in
+                if let error = error as? ASWebAuthenticationSessionError, error.code == .canceledLogin {
+                    continuation.resume(throwing: AuthError.cancelled)
+                    return
                 }
-            default:
-                break
+                if let error = error {
+                    continuation.resume(throwing: AuthError.sessionError(error))
+                    return
+                }
+                guard let callbackURL = callbackURL else {
+                    continuation.resume(throwing: AuthError.noCallbackURL)
+                    return
+                }
+                continuation.resume(returning: callbackURL)
+            }
+
+            session.presentationContextProvider = self
+            session.prefersEphemeralWebBrowserSession = false
+
+            self.session = session
+
+            if !session.start() {
+                continuation.resume(throwing: AuthError.failedToStart)
             }
         }
-
-        listener?.newConnectionHandler = { [weak self] connection in
-            self?.handleConnection(connection)
-        }
-
-        listener?.start(queue: .main)
-    }
-
-    /// Handles an incoming connection from the OAuth callback.
-    private nonisolated func handleConnection(_ connection: NWConnection) {
-        connection.start(queue: .main)
-
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, error in
-            guard let self = self else { return }
-
-            if let data = data, let request = String(data: data, encoding: .utf8) {
-                Task { @MainActor in
-                    self.processCallback(request: request, connection: connection)
-                }
-            } else if let error = error {
-                Logger.auth.error("OAuth callback connection error: \(error.localizedDescription)")
-                FileLog.write("OAuth callback connection error: \(error.localizedDescription)", level: "ERROR", category: "auth")
-                Task { @MainActor in
-                    self.sendResponse(connection: connection, success: false, message: "Connection error")
-                }
-            }
-        }
-    }
-
-    /// Processes the OAuth callback request and extracts the auth code.
-    private func processCallback(request: String, connection: NWConnection) {
-        // Parse the HTTP request to extract the path
-        guard let firstLine = request.components(separatedBy: "\r\n").first,
-              let urlPart = firstLine.components(separatedBy: " ").dropFirst().first,
-              let urlComponents = URLComponents(string: "http://localhost\(urlPart)") else {
-            sendResponse(connection: connection, success: false, message: "Invalid request")
-            return
-        }
-
-        // Check for error in callback
-        if let error = urlComponents.queryItems?.first(where: { $0.name == "error" })?.value {
-            sendResponse(connection: connection, success: false, message: "Strava error: \(error)")
-            stopCallbackServer()
-            authContinuation?.resume(throwing: AuthError.stravaError(error))
-            authContinuation = nil
-            return
-        }
-
-        // Extract the authorization code
-        guard let code = urlComponents.queryItems?.first(where: { $0.name == "code" })?.value else {
-            sendResponse(connection: connection, success: false, message: "No authorization code received")
-            stopCallbackServer()
-            authContinuation?.resume(throwing: AuthError.noAuthCode)
-            authContinuation = nil
-            return
-        }
-
-        // Success - send response and complete
-        sendResponse(connection: connection, success: true, message: "Authentication successful! You can close this window.")
-        stopCallbackServer()
-        authContinuation?.resume(returning: code)
-        authContinuation = nil
-    }
-
-    /// Sends an HTTP response to the browser.
-    private nonisolated func sendResponse(connection: NWConnection, success: Bool, message: String) {
-        let html = """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Club Calendar - \(success ? "Success" : "Error")</title>
-            <style>
-                body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background: \(success ? "#f0fff0" : "#fff0f0"); }
-                .container { text-align: center; padding: 40px; }
-                h1 { color: \(success ? "#228B22" : "#DC143C"); }
-                p { color: #666; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>\(success ? "✓" : "✗") \(success ? "Success" : "Error")</h1>
-                <p>\(message)</p>
-            </div>
-        </body>
-        </html>
-        """
-
-        let response = """
-        HTTP/1.1 200 OK\r
-        Content-Type: text/html; charset=utf-8\r
-        Content-Length: \(html.utf8.count)\r
-        Connection: close\r
-        \r
-        \(html)
-        """
-
-        connection.send(content: response.data(using: .utf8), completion: .contentProcessed { _ in
-            connection.cancel()
-        })
-    }
-
-    /// Stops the callback server.
-    private func stopCallbackServer() {
-        listener?.cancel()
-        listener = nil
     }
 
     /// Disconnects from Strava by clearing auth tokens.
     func disconnect() async throws {
-        try await keychain.clearAuth()
+        try keychain.clearAuth()
     }
 
     /// Checks if user is authenticated.
     func isAuthenticated() async -> Bool {
-        await keychain.isAuthenticated()
+        keychain.isAuthenticated()
     }
 
     /// Gets the authenticated athlete's name.
     func getAthleteName() async -> String? {
-        await keychain.getStringOrNil(for: .athleteName)
+        keychain.getStringOrNil(for: .athleteName)
+    }
+}
+
+// MARK: - ASWebAuthenticationPresentationContextProviding
+
+extension AuthService: ASWebAuthenticationPresentationContextProviding {
+    nonisolated func presentationAnchor(
+        for session: ASWebAuthenticationSession
+    ) -> ASPresentationAnchor {
+        // ASWebAuthenticationSession wants a window to attach to. On a menu-
+        // bar app (LSUIElement) there is often no key window, so fall back
+        // to the first window or a fresh anchor — the system handles the rest.
+        MainActor.assumeIsolated {
+            NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first ?? ASPresentationAnchor()
+        }
     }
 }
 
@@ -246,7 +151,7 @@ enum AuthError: Error, LocalizedError, Sendable {
         case .stravaError(let error):
             return "Strava error: \(error)"
         case .failedToStart:
-            return "Failed to start authentication server."
+            return "Failed to start authentication session."
         }
     }
 }

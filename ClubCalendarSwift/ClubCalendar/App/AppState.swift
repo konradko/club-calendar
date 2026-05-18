@@ -55,26 +55,26 @@ final class AppState {
 
     func onAppear() async {
         Logger.app.info("App appeared, refreshing state")
-        FileLog.write("App appeared, refreshing state", category: "app")
         await refreshState()
 
         // Show onboarding if not completed
         if !settings.onboardingCompleted {
             Logger.app.info("Onboarding not completed, showing setup")
-            FileLog.write("Onboarding not completed, showing setup", category: "app")
             showOnboarding = true
         } else {
-            Logger.app.info("Starting auto-sync (authenticated: \(self.isAuthenticated), calendar: \(String(describing: self.calendarAccessStatus)))")
-            FileLog.write("Starting auto-sync (authenticated: \(isAuthenticated), calendar: \(String(describing: calendarAccessStatus)))", category: "app")
-            // Start auto-sync if onboarding completed
+            Logger.app.info("Starting auto-sync (authenticated: \(self.isAuthenticated, privacy: .public), calendar: \(String(describing: self.calendarAccessStatus), privacy: .public))")
+            // Start auto-sync on first appearance; on subsequent menu opens this
+            // is a no-op (scheduler already running) but we still opportunistically
+            // refresh stale data so the user never sees an outdated menu.
             syncService.startAutoSync()
+            await syncService.syncIfStale()
             await refreshUpcomingEvents()
         }
     }
 
     /// Refreshes all state from keychain and services.
     func refreshState() async {
-        hasAPICredentials = await keychain.hasAPICredentials()
+        hasAPICredentials = keychain.hasAPICredentials()
         isAuthenticated = await authService.isAuthenticated()
         athleteName = await authService.getAthleteName()
         calendarAccessStatus = await calendarService.checkAccessStatus()
@@ -111,13 +111,10 @@ final class AppState {
             isAuthenticated = true
             athleteName = await authService.getAthleteName()
             Logger.app.info("Authentication successful")
-            FileLog.write("Authentication successful", category: "app")
         } catch AuthError.cancelled {
             Logger.app.info("Authentication cancelled by user")
-            FileLog.write("Authentication cancelled by user", category: "app")
         } catch {
             Logger.app.error("Authentication failed: \(error.localizedDescription)")
-            FileLog.write("Authentication failed: \(error.localizedDescription)", level: "ERROR", category: "app")
             errorMessage = error.localizedDescription
         }
 
@@ -137,8 +134,8 @@ final class AppState {
 
     func saveCredentials(clientId: String, clientSecret: String) async {
         do {
-            try await keychain.save(clientId, for: .clientId)
-            try await keychain.save(clientSecret, for: .clientSecret)
+            try keychain.save(clientId, for: .clientId)
+            try keychain.save(clientSecret, for: .clientSecret)
             hasAPICredentials = true
         } catch {
             errorMessage = error.localizedDescription
@@ -174,7 +171,6 @@ final class AppState {
             } else {
                 try SMAppService.mainApp.unregister()
             }
-            settings.startAtLogin = enabled
         } catch {
             errorMessage = "Failed to update login item: \(error.localizedDescription)"
         }

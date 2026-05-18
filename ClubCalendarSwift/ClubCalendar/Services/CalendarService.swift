@@ -40,6 +40,17 @@ enum CalendarAccessStatus: Sendable {
 
 /// Manages calendar operations using EventKit.
 actor CalendarService {
+    /// How far around `now` to scan when deduplicating existing events.
+    /// Strava only returns upcoming events, so we need a generous lookback
+    /// to find past EKEvents that share a Strava ID with a recurring series.
+    private static let dedupWindow: TimeInterval = 180 * 24 * 60 * 60
+
+    /// Default duration when Strava doesn't return an end time.
+    private static let defaultEventDuration: TimeInterval = 60 * 60
+
+    /// Window for upcoming events shown in the menu bar.
+    private static let upcomingEventsWindow: TimeInterval = 30 * 24 * 60 * 60
+
     private let eventStore: EKEventStore
     private let calendarName: String
 
@@ -141,7 +152,6 @@ actor CalendarService {
     /// Syncs Strava events to the calendar.
     func syncEvents(_ clubEvents: [ClubEvent]) async throws -> SyncResult {
         Logger.calendar.info("Syncing \(clubEvents.count) event(s) to calendar")
-        FileLog.write("Syncing \(clubEvents.count) event(s) to calendar '\(self.calendarName)'", category: "calendar")
         let calendar = try getOrCreateCalendar()
         var created = 0
         var updated = 0
@@ -152,11 +162,9 @@ actor CalendarService {
         // and caused a fresh duplicate every time a recurring event rolled
         // over to its next occurrence.
         let now = Date()
-        let lookbackStart = Calendar.current.date(byAdding: .day, value: -180, to: now)!
-        let lookaheadEnd = Calendar.current.date(byAdding: .day, value: 180, to: now)!
         let predicate = eventStore.predicateForEvents(
-            withStart: lookbackStart,
-            end: lookaheadEnd,
+            withStart: now.addingTimeInterval(-Self.dedupWindow),
+            end: now.addingTimeInterval(Self.dedupWindow),
             calendars: [calendar]
         )
         var existingEvents = eventStore.events(matching: predicate)
@@ -166,7 +174,6 @@ actor CalendarService {
         let removedDups = removeDuplicates(in: &existingEvents)
         if removedDups > 0 {
             Logger.calendar.info("Removed \(removedDups) duplicate event(s)")
-            FileLog.write("Removed \(removedDups) duplicate event(s)", category: "calendar")
         }
 
         // Build lookup of existing events by Strava ID (stored in URL)
@@ -191,7 +198,6 @@ actor CalendarService {
                         updated += 1
                     } catch {
                         Logger.calendar.error("Failed to update event \(clubEvent.id): \(error.localizedDescription)")
-                        FileLog.write("Failed to update event \(clubEvent.id): \(error.localizedDescription)", level: "ERROR", category: "calendar")
                     }
                 }
             } else {
@@ -203,7 +209,6 @@ actor CalendarService {
                     created += 1
                 } catch {
                     Logger.calendar.error("Failed to create event \(clubEvent.id): \(error.localizedDescription)")
-                    FileLog.write("Failed to create event \(clubEvent.id): \(error.localizedDescription)", level: "ERROR", category: "calendar")
                 }
             }
         }
@@ -221,7 +226,6 @@ actor CalendarService {
                         cancelled += 1
                     } catch {
                         Logger.calendar.error("Failed to cancel event \(stravaId): \(error.localizedDescription)")
-                        FileLog.write("Failed to cancel event \(stravaId): \(error.localizedDescription)", level: "ERROR", category: "calendar")
                     }
                 }
             }
@@ -229,7 +233,6 @@ actor CalendarService {
 
         let result = SyncResult(created: created, updated: updated, cancelled: cancelled)
         Logger.calendar.info("Calendar sync result: \(result.summary)")
-        FileLog.write("Calendar sync result: \(result.summary)", category: "calendar")
         return result
     }
 
@@ -238,7 +241,7 @@ actor CalendarService {
     private func configureEvent(_ event: EKEvent, from clubEvent: ClubEvent, calendar: EKCalendar) {
         event.title = clubEvent.formattedTitle
         event.startDate = clubEvent.startDatetime
-        event.endDate = clubEvent.startDatetime.addingTimeInterval(3600)  // 1 hour default
+        event.endDate = clubEvent.startDatetime.addingTimeInterval(Self.defaultEventDuration)
         event.calendar = calendar
         event.url = clubEvent.stravaURL
         event.location = clubEvent.address
@@ -257,7 +260,7 @@ actor CalendarService {
 
         if event.startDate != clubEvent.startDatetime {
             event.startDate = clubEvent.startDatetime
-            event.endDate = clubEvent.startDatetime.addingTimeInterval(3600)
+            event.endDate = clubEvent.startDatetime.addingTimeInterval(Self.defaultEventDuration)
             changed = true
         }
 
@@ -330,7 +333,6 @@ actor CalendarService {
                     removed += 1
                 } catch {
                     Logger.calendar.error("Failed to remove duplicate: \(error.localizedDescription)")
-                    FileLog.write("Failed to remove duplicate: \(error.localizedDescription)", level: "ERROR", category: "calendar")
                     keepers.append(victim)
                 }
             }
@@ -365,7 +367,7 @@ actor CalendarService {
         }
 
         let startDate = Date()
-        let endDate = Calendar.current.date(byAdding: .day, value: 30, to: startDate)!
+        let endDate = startDate.addingTimeInterval(Self.upcomingEventsWindow)
 
         let predicate = eventStore.predicateForEvents(
             withStart: startDate,
@@ -387,17 +389,20 @@ struct CalendarEventData: Identifiable, Sendable {
     let id: String
     let title: String
     let startDate: Date
+    let url: URL?
 
-    init(id: String, title: String, startDate: Date) {
+    init(id: String, title: String, startDate: Date, url: URL? = nil) {
         self.id = id
         self.title = title
         self.startDate = startDate
+        self.url = url
     }
 
     init(from event: EKEvent) {
         self.id = event.eventIdentifier ?? UUID().uuidString
         self.title = event.title ?? "Untitled"
         self.startDate = event.startDate
+        self.url = event.url
     }
 }
 

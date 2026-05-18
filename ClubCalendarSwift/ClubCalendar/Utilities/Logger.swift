@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OSLog
 import os
 
 extension Logger {
@@ -12,58 +13,58 @@ extension Logger {
     static let app = Logger(subsystem: subsystem, category: "app")
 }
 
-/// Appends log lines to a file for post-mortem debugging.
-enum FileLog {
-    static let logDirectory = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Logs/Club Calendar")
+/// Reads recent entries from the unified log and opens them in the default text
+/// editor. Replaces the older parallel file-log: os.Logger already persists
+/// across launches, so we just dump on demand.
+enum LogViewer {
+    private static let dumpFile = FileManager.default.temporaryDirectory
+        .appendingPathComponent("club-calendar.log")
 
-    static let logFile = logDirectory.appendingPathComponent("club-calendar-swift.log")
+    @MainActor
+    static func openRecentLogs(hours: Int = 24) {
+        do {
+            let store = try OSLogStore(scope: .currentProcessIdentifier)
+            let since = store.position(date: Date().addingTimeInterval(-Double(hours) * 3600))
+            let predicate = NSPredicate(format: "subsystem == %@", Logger.subsystem)
+            let entries = try store.getEntries(at: since, matching: predicate)
 
-    private static let queue = DispatchQueue(label: "com.clubcalendar.filelog", qos: .utility)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
-    private static let dateFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        return formatter
-    }()
+            var lines: [String] = []
+            for entry in entries {
+                guard let log = entry as? OSLogEntryLog else { continue }
+                lines.append("\(formatter.string(from: log.date)) [\(log.level.label)] [\(log.category)] \(log.composedMessage)")
+            }
 
-    /// Writes a log line to the file. Non-blocking (dispatched to background queue).
-    static func write(_ message: String, level: String = "INFO", category: String = "app") {
-        queue.async {
-            do {
-                try FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+            let text = lines.isEmpty
+                ? "No log entries in the last \(hours) hours.\n"
+                : lines.joined(separator: "\n") + "\n"
 
-                let timestamp = dateFormatter.string(from: Date())
-                let line = "\(timestamp) [\(level)] [\(category)] \(message)\n"
-
-                if FileManager.default.fileExists(atPath: logFile.path) {
-                    let handle = try FileHandle(forWritingTo: logFile)
-                    handle.seekToEndOfFile()
-                    handle.write(Data(line.utf8))
-                    handle.closeFile()
-                } else {
-                    try Data(line.utf8).write(to: logFile)
-                }
-            } catch {
-                // Last resort — can't log a logging failure
+            try text.write(to: dumpFile, atomically: true, encoding: .utf8)
+            NSWorkspace.shared.open(dumpFile)
+        } catch {
+            Logger.app.error("Failed to export logs: \(error.localizedDescription, privacy: .public)")
+            // Fall back to opening Console.app so the user has somewhere to look.
+            if let consoleURL = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: "com.apple.Console"
+            ) {
+                NSWorkspace.shared.open(consoleURL)
             }
         }
     }
+}
 
-    /// Returns the path to the log file, creating the directory if needed.
-    static var logFilePath: String {
-        logFile.path
-    }
-
-    /// Opens the log file in the default text editor.
-    @MainActor
-    static func openLogFile() {
-        // Create file if it doesn't exist so the user sees something
-        if !FileManager.default.fileExists(atPath: logFile.path) {
-            try? FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
-            FileManager.default.createFile(atPath: logFile.path, contents: nil)
+private extension OSLogEntryLog.Level {
+    var label: String {
+        switch self {
+        case .undefined: return "UNDEFINED"
+        case .debug: return "DEBUG"
+        case .info: return "INFO"
+        case .notice: return "NOTICE"
+        case .error: return "ERROR"
+        case .fault: return "FAULT"
+        @unknown default: return "UNKNOWN"
         }
-        NSWorkspace.shared.open(logFile)
     }
 }

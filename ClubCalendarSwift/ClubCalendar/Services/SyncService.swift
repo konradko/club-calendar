@@ -10,9 +10,8 @@ final class SyncService {
     private let stravaService: StravaService
     private let calendarService: CalendarService
     private let settings: AppSettings
-    private var syncTimer: Timer?
+    private var scheduler: NSBackgroundActivityScheduler?
     private var wakeObserver: NSObjectProtocol?
-    private var activityToken: NSObjectProtocol?
     private var isSyncing = false
 
     var lastSyncTime: Date?
@@ -30,38 +29,41 @@ final class SyncService {
         self.settings = settings
     }
 
-    // MARK: - Timer Management
+    // MARK: - Scheduler Management
 
-    /// Starts the auto-sync timer based on settings.
+    /// Starts the auto-sync scheduler based on settings. Idempotent — calling
+    /// while already running is a no-op (use `restartAutoSync()` after a
+    /// settings change to pick up a new interval).
     func startAutoSync() {
-        stopAutoSync()
+        guard scheduler == nil else { return }
 
         let interval = settings.syncInterval
         guard interval != .never else { return }
 
-        // App Nap throttles Foundation timers on idle LSUIElement apps, so a
-        // menu bar app left untouched for hours stops firing its sync timer.
-        // Holding a user-initiated activity tells macOS we're doing periodic
-        // work that must run on schedule (system sleep is still allowed).
-        activityToken = ProcessInfo.processInfo.beginActivity(
-            options: [.userInitiatedAllowingIdleSystemSleep],
-            reason: "Club Calendar periodic Strava sync"
+        // NSBackgroundActivityScheduler is Apple's recommended API for
+        // periodic work on macOS: it isn't throttled by App Nap, batches with
+        // other system activities, and resumes scheduling automatically after
+        // wake. Foundation timers (even with .common / beginActivity) drift
+        // or stop on long-idle LSUIElement apps.
+        let activity = NSBackgroundActivityScheduler(
+            identifier: "com.clubcalendar.app.sync"
         )
-
-        let intervalSeconds = TimeInterval(interval.rawValue * 60)
-        let timer = Timer(timeInterval: intervalSeconds, repeats: true) { [weak self] _ in
+        activity.repeats = true
+        activity.interval = TimeInterval(interval.rawValue * 60)
+        // 10% tolerance lets the system coalesce our wakeups with others.
+        activity.tolerance = TimeInterval(interval.rawValue * 60) / 10
+        activity.qualityOfService = .utility
+        activity.schedule { [weak self] completion in
             Task { @MainActor [weak self] in
                 await self?.sync()
+                completion(.finished)
             }
         }
-        // .common keeps the timer firing while menus / modal panels are open
-        // (those run loop modes would otherwise pause a .default-mode timer).
-        RunLoop.main.add(timer, forMode: .common)
-        syncTimer = timer
+        scheduler = activity
 
-        // Foundation timers don't fire while the Mac is asleep; without this
-        // hook the app can sit idle for days after a wake. Trigger a sync as
-        // soon as the system reports it has woken up.
+        // The scheduler is paused while the Mac sleeps and the next fire may
+        // be up to one interval after wake. Force an immediate catch-up on
+        // wake so a 60-minute interval doesn't mean a 60-minute stale menu.
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification,
             object: nil,
@@ -69,7 +71,6 @@ final class SyncService {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
                 Logger.sync.info("System woke — triggering sync")
-                FileLog.write("System woke — triggering sync", category: "sync")
                 await self?.sync()
             }
         }
@@ -80,23 +81,34 @@ final class SyncService {
         }
     }
 
-    /// Stops the auto-sync timer.
+    /// Stops the auto-sync scheduler.
     func stopAutoSync() {
-        syncTimer?.invalidate()
-        syncTimer = nil
+        scheduler?.invalidate()
+        scheduler = nil
         if let observer = wakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
             wakeObserver = nil
-        }
-        if let token = activityToken {
-            ProcessInfo.processInfo.endActivity(token)
-            activityToken = nil
         }
     }
 
     /// Restarts auto-sync (call when settings change).
     func restartAutoSync() {
+        stopAutoSync()
         startAutoSync()
+    }
+
+    /// Triggers a sync if the last successful sync is older than the configured
+    /// interval. Called when the menu opens so the user sees fresh data even
+    /// if the scheduler hasn't fired yet (e.g. just after wake).
+    func syncIfStale() async {
+        let interval = settings.syncInterval
+        guard interval != .never else { return }
+        let intervalSeconds = TimeInterval(interval.rawValue * 60)
+
+        if let last = lastSyncTime, Date().timeIntervalSince(last) < intervalSeconds {
+            return
+        }
+        await sync()
     }
 
     // MARK: - Sync Operations
@@ -112,7 +124,6 @@ final class SyncService {
         defer { isSyncing = false }
 
         Logger.sync.info("Starting sync...")
-        FileLog.write("Starting sync...", category: "sync")
         lastSyncError = nil
 
         do {
@@ -120,7 +131,6 @@ final class SyncService {
             let accessStatus = await calendarService.checkAccessStatus()
             guard accessStatus == .authorized else {
                 Logger.sync.error("Calendar access not authorized")
-                FileLog.write("Calendar access not authorized", level: "ERROR", category: "sync")
                 throw CalendarError.accessDenied
             }
 
@@ -128,41 +138,34 @@ final class SyncService {
             let clubIds = Array(settings.enabledClubIds)
             guard !clubIds.isEmpty else {
                 Logger.sync.info("No clubs enabled, nothing to sync")
-                FileLog.write("No clubs enabled, nothing to sync", category: "sync")
                 lastSyncResult = SyncResult(created: 0, updated: 0, cancelled: 0)
                 lastSyncTime = Date()
                 return
             }
 
             Logger.sync.info("Fetching events for \(clubIds.count) club(s)")
-            FileLog.write("Fetching events for \(clubIds.count) club(s): \(clubIds)", category: "sync")
 
             // Fetch events from Strava
             let events = try await stravaService.getEventsForClubs(clubIds)
             Logger.sync.info("Fetched \(events.count) event(s) from Strava")
-            FileLog.write("Fetched \(events.count) event(s) from Strava", category: "sync")
 
             // Sync to calendar
             let result = try await calendarService.syncEvents(events)
 
             Logger.sync.info("Sync complete: \(result.summary)")
-            FileLog.write("Sync complete: \(result.summary)", category: "sync")
             lastSyncResult = result
             lastSyncTime = Date()
         } catch {
             lastSyncError = error
             Logger.sync.error("Sync failed: \(error.localizedDescription)")
-            FileLog.write("Sync failed: \(error.localizedDescription)", level: "ERROR", category: "sync")
         }
     }
 
     /// Fetches clubs from Strava and updates settings.
     func refreshClubs() async throws {
         Logger.sync.info("Refreshing clubs from Strava")
-        FileLog.write("Refreshing clubs from Strava", category: "sync")
         let clubs = try await stravaService.getAthleteClubs()
         Logger.sync.info("Fetched \(clubs.count) club(s)")
-        FileLog.write("Fetched \(clubs.count) club(s)", category: "sync")
         settings.updateClubs(clubs)
     }
 
@@ -171,15 +174,9 @@ final class SyncService {
     /// Formatted string for last sync time.
     var lastSyncTimeFormatted: String? {
         guard let time = lastSyncTime else { return nil }
-
-        let formatter = DateFormatter()
         if Calendar.current.isDateInToday(time) {
-            formatter.timeStyle = .short
-            formatter.dateStyle = .none
-        } else {
-            formatter.timeStyle = .short
-            formatter.dateStyle = .short
+            return time.formatted(date: .omitted, time: .shortened)
         }
-        return formatter.string(from: time)
+        return time.formatted(date: .numeric, time: .shortened)
     }
 }

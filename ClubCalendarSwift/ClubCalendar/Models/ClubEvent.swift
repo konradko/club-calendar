@@ -137,27 +137,15 @@ extension ClubEvent: Codable {
         try container.encode(clubId, forKey: .clubId)
         try container.encode(clubName, forKey: .clubName)
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        try container.encode(formatter.string(from: startDatetime), forKey: .startDatetime)
+        try container.encode(startDatetime.formatted(.iso8601), forKey: .startDatetime)
     }
 
     /// Parses an ISO 8601 date string (with or without fractional seconds).
     private static func parseDate(_ string: String) throws -> Date {
-        let formatter = ISO8601DateFormatter()
-
-        // Try with fractional seconds
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: string) {
+        if let date = try? Date(string, strategy: .iso8601) { return date }
+        if let date = try? Date(string, strategy: .iso8601.year().month().day().dateTimeSeparator(.standard).time(includingFractionalSeconds: true)) {
             return date
         }
-
-        // Try without fractional seconds
-        formatter.formatOptions = [.withInternetDateTime]
-        if let date = formatter.date(from: string) {
-            return date
-        }
-
         throw DecodingError.dataCorrupted(
             DecodingError.Context(
                 codingPath: [],

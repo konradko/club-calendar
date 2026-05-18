@@ -34,13 +34,19 @@ enum KeychainError: Error, LocalizedError, Sendable {
 }
 
 /// Helper for secure keychain storage.
-actor KeychainHelper {
+///
+/// SecItem APIs are thread-safe, so we expose synchronous methods rather than
+/// wrapping in an `actor` (which would force every call site to `await` across
+/// an executor hop).
+final class KeychainHelper: KeychainHelperProtocol, @unchecked Sendable {
+    /// Treat tokens as expired this many seconds before their actual expiry,
+    /// to ensure we refresh before a request would 401.
+    private static let tokenExpiryBuffer: TimeInterval = 5 * 60
+
     static let shared = KeychainHelper()
 
-    /// Shared service name groups all items under one keychain access prompt.
-    private let service = "com.clubcalendar.app"
-
     /// Base query attributes shared by every keychain operation.
+    /// Service name groups all items under one keychain access prompt.
     ///
     /// The data-protection keychain is gated by the `keychain-access-groups`
     /// entitlement, which on macOS 26+ requires a provisioning profile (i.e.
@@ -48,12 +54,10 @@ actor KeychainHelper {
     /// profile, so AMFI rejects launch with "no matching profile found".
     /// We use the legacy file keychain instead — ACL prompts only fire when
     /// the signing identity changes, and the dev cert is stable.
-    private var baseQuery: [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service
-        ]
-    }
+    private let baseQuery: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "com.clubcalendar.app"
+    ]
 
     // MARK: - String Operations
 
@@ -161,8 +165,7 @@ actor KeychainHelper {
         }
 
         let expiryDate = Date(timeIntervalSince1970: expiryTimestamp)
-        // Consider token expired if less than 5 minutes remaining
-        guard expiryDate > Date().addingTimeInterval(300) else {
+        guard expiryDate > Date().addingTimeInterval(Self.tokenExpiryBuffer) else {
             return nil
         }
 

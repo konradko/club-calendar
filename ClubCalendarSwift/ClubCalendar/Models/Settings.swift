@@ -36,10 +36,6 @@ final class AppSettings {
     @ObservationIgnored
     @AppStorage("calendarName") var calendarName: String = "Club Calendar"
 
-    /// Whether to start the app at login.
-    @ObservationIgnored
-    @AppStorage("startAtLogin") var startAtLogin: Bool = false
-
     /// Whether to show upcoming events in the menu bar.
     @ObservationIgnored
     @AppStorage("showUpcomingEvents") var showUpcomingEvents: Bool = true

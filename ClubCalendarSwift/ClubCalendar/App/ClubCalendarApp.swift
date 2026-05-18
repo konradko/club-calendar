@@ -8,7 +8,6 @@ struct ClubCalendarApp: App {
 
     init() {
         Logger.app.info("Club Calendar launching")
-        FileLog.write("Club Calendar launching", category: "app")
     }
 
     var body: some Scene {
