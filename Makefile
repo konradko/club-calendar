@@ -100,7 +100,7 @@ dmg: sign
 	hdiutil create -volname "$(APP_NAME)" -srcfolder "$(DMG_STAGING)" -ov -format UDZO "$(APP_NAME).dmg"
 	@rm -rf "$(DMG_STAGING)"
 	@echo "DMG created: $(APP_NAME).dmg"
-	open /Users/konrad/workspace/club-calendar/ClubCalendarSwift/ClubCalendar.dmg
+	open /Users/konrad/workspace/club-calendar/ClubCalendar.dmg
 
 # Full release build
 release: clean dmg

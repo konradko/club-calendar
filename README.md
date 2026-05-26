@@ -26,7 +26,7 @@ Grab the latest DMG from [Releases](https://github.com/konradko/club-calendar/re
 
 ```bash
 git clone https://github.com/konradko/club-calendar
-cd club-calendar/ClubCalendarSwift
+cd club-calendar
 make dmg
 ```
 
@@ -42,16 +42,15 @@ Credentials and OAuth tokens are stored in the macOS Keychain (data-protection-s
 ## Project layout
 
 ```
-ClubCalendarSwift/
-├── ClubCalendar/
-│   ├── App/         # ClubCalendarApp (SwiftUI @main), AppState
-│   ├── Models/      # Club, ClubEvent, Settings
-│   ├── Services/    # StravaService, CalendarService, AuthService, SyncService, KeychainHelper
-│   ├── Views/       # MenuBarView, SettingsView (+ subviews), OnboardingView
-│   ├── Utilities/   # Logger, ActivityEmoji
-│   └── Resources/   # Icons, entitlements
-├── ClubCalendarTests/
-└── Makefile         # build / bundle / sign / dmg / dev / test
+ClubCalendar/
+├── App/         # ClubCalendarApp (SwiftUI @main), AppState
+├── Models/      # Club, ClubEvent, Settings
+├── Services/    # StravaService, CalendarService, AuthService, SyncService, KeychainHelper
+├── Views/       # MenuBarView, SettingsView (+ subviews), OnboardingView
+├── Utilities/   # Logger, ActivityEmoji
+└── Resources/   # Icons, entitlements
+ClubCalendarTests/
+Makefile         # build / bundle / sign / dmg / dev / test
 ```
 
 ## Architecture
