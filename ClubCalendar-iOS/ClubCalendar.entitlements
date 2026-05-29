@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      The data-protection keychain requires the app to own a keychain access
+      group. Without it, SecItemAdd fails with -34018 (errSecMissingEntitlement)
+      — which is what unsigned builds (CODE_SIGNING_ALLOWED=NO) hit on the
+      simulator. `$(AppIdentifierPrefix)` resolves to the team prefix on signed
+      device builds and to empty on ad-hoc simulator builds, giving the app its
+      own private group either way.
+    -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)com.clubcalendar.ios</string>
+    </array>
+</dict>
+</plist>

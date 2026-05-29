@@ -4,6 +4,10 @@ DerivedData/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
 
+# xcodegen output (regenerated from ClubCalendar-iOS/project.yml)
+ClubCalendar-iOS/ClubCalendar-iOS.xcodeproj/
+ClubCalendar-iOS/Sources/Info.plist
+
 # Swift Package Manager
 .swiftpm/
 

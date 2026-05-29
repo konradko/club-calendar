@@ -1,0 +1,212 @@
+import Foundation
+import Security
+
+/// Keys for keychain items.
+public enum KeychainKey: String, Sendable {
+    case clientId = "com.clubcalendar.clientId"
+    case clientSecret = "com.clubcalendar.clientSecret"
+    case accessToken = "com.clubcalendar.accessToken"
+    case refreshToken = "com.clubcalendar.refreshToken"
+    case tokenExpiry = "com.clubcalendar.tokenExpiry"
+    case athleteId = "com.clubcalendar.athleteId"
+    case athleteName = "com.clubcalendar.athleteName"
+}
+
+/// Errors that can occur during keychain operations.
+public enum KeychainError: Error, LocalizedError, Sendable {
+    case itemNotFound
+    case duplicateItem
+    case unexpectedStatus(OSStatus)
+    case dataConversionFailed
+
+    public var errorDescription: String? {
+        switch self {
+        case .itemNotFound:
+            return "Item not found in keychain"
+        case .duplicateItem:
+            return "Item already exists in keychain"
+        case .unexpectedStatus(let status):
+            return "Keychain error: \(status)"
+        case .dataConversionFailed:
+            return "Failed to convert data"
+        }
+    }
+}
+
+/// Helper for secure keychain storage.
+///
+/// SecItem APIs are thread-safe, so we expose synchronous methods rather than
+/// wrapping in an `actor` (which would force every call site to `await` across
+/// an executor hop).
+public final class KeychainHelper: KeychainHelperProtocol, @unchecked Sendable {
+    /// Treat tokens as expired this many seconds before their actual expiry,
+    /// to ensure we refresh before a request would 401.
+    private static let tokenExpiryBuffer: TimeInterval = 5 * 60
+
+    public static let shared = KeychainHelper()
+
+    public init() {}
+
+    /// Base query attributes shared by every keychain operation.
+    /// Service name groups all items under one keychain access prompt.
+    ///
+    /// On macOS the data-protection keychain is gated by the
+    /// `keychain-access-groups` entitlement, which on macOS 26+ requires a
+    /// provisioning profile (i.e. an Apple Developer Team ID). Self-signed
+    /// dev builds have no such profile, so AMFI rejects launch with "no
+    /// matching profile found" — we land in the legacy file keychain via the
+    /// same SecItem API. On iOS the data-protection keychain is always
+    /// available without extra entitlements.
+    private let baseQuery: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "com.clubcalendar.app"
+    ]
+
+    // MARK: - String Operations
+
+    /// Saves a string value to the keychain.
+    public func save(_ value: String, for key: KeychainKey) throws {
+        guard let data = value.data(using: .utf8) else {
+            throw KeychainError.dataConversionFailed
+        }
+        try save(data, for: key)
+    }
+
+    /// Retrieves a string value from the keychain.
+    public func getString(for key: KeychainKey) throws -> String {
+        let data = try getData(for: key)
+        guard let string = String(data: data, encoding: .utf8) else {
+            throw KeychainError.dataConversionFailed
+        }
+        return string
+    }
+
+    /// Retrieves a string value from the keychain, returning nil if not found.
+    public func getStringOrNil(for key: KeychainKey) -> String? {
+        try? getString(for: key)
+    }
+
+    // MARK: - Data Operations
+
+    /// Saves data to the keychain.
+    public func save(_ data: Data, for key: KeychainKey) throws {
+        var query = baseQuery
+        query[kSecAttrAccount as String] = key.rawValue
+        query[kSecValueData as String] = data
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+
+        var deleteQuery = baseQuery
+        deleteQuery[kSecAttrAccount as String] = key.rawValue
+        SecItemDelete(deleteQuery as CFDictionary)
+
+        let status = SecItemAdd(query as CFDictionary, nil)
+        guard status == errSecSuccess else {
+            throw KeychainError.unexpectedStatus(status)
+        }
+    }
+
+    /// Retrieves data from the keychain.
+    public func getData(for key: KeychainKey) throws -> Data {
+        var query = baseQuery
+        query[kSecAttrAccount as String] = key.rawValue
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+
+        guard status == errSecSuccess else {
+            if status == errSecItemNotFound {
+                throw KeychainError.itemNotFound
+            }
+            throw KeychainError.unexpectedStatus(status)
+        }
+
+        guard let data = result as? Data else {
+            throw KeychainError.dataConversionFailed
+        }
+
+        return data
+    }
+
+    /// Deletes an item from the keychain.
+    public func delete(key: KeychainKey) throws {
+        var query = baseQuery
+        query[kSecAttrAccount as String] = key.rawValue
+
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainError.unexpectedStatus(status)
+        }
+    }
+
+    /// Checks if a key exists in the keychain.
+    public func exists(key: KeychainKey) -> Bool {
+        var query = baseQuery
+        query[kSecAttrAccount as String] = key.rawValue
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        return status == errSecSuccess
+    }
+
+    // MARK: - Token Management
+
+    /// Saves OAuth tokens to the keychain.
+    public func saveTokens(accessToken: String, refreshToken: String, expiresAt: Date) throws {
+        try save(accessToken, for: .accessToken)
+        try save(refreshToken, for: .refreshToken)
+        try save(String(expiresAt.timeIntervalSince1970), for: .tokenExpiry)
+    }
+
+    /// Retrieves the current access token if valid, nil otherwise.
+    public func getValidAccessToken() -> String? {
+        guard let token = getStringOrNil(for: .accessToken),
+              let expiryString = getStringOrNil(for: .tokenExpiry),
+              let expiryTimestamp = Double(expiryString) else {
+            return nil
+        }
+
+        let expiryDate = Date(timeIntervalSince1970: expiryTimestamp)
+        guard expiryDate > Date().addingTimeInterval(Self.tokenExpiryBuffer) else {
+            return nil
+        }
+
+        return token
+    }
+
+    /// Gets the token expiry date.
+    public func getTokenExpiry() -> Date? {
+        guard let expiryString = getStringOrNil(for: .tokenExpiry),
+              let expiryTimestamp = Double(expiryString) else {
+            return nil
+        }
+        return Date(timeIntervalSince1970: expiryTimestamp)
+    }
+
+    /// Clears all auth-related keychain items.
+    public func clearAuth() throws {
+        try delete(key: .accessToken)
+        try delete(key: .refreshToken)
+        try delete(key: .tokenExpiry)
+        try delete(key: .athleteId)
+        try delete(key: .athleteName)
+    }
+
+    /// Clears all keychain items including API credentials.
+    public func clearAll() throws {
+        try clearAuth()
+        try delete(key: .clientId)
+        try delete(key: .clientSecret)
+    }
+
+    /// Checks if Strava API credentials are configured.
+    public func hasAPICredentials() -> Bool {
+        exists(key: .clientId) && exists(key: .clientSecret)
+    }
+
+    /// Checks if user is authenticated (has refresh token).
+    public func isAuthenticated() -> Bool {
+        exists(key: .refreshToken)
+    }
+}

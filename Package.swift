@@ -5,20 +5,33 @@ import PackageDescription
 let package = Package(
     name: "ClubCalendar",
     platforms: [
-        .macOS(.v26)
+        .macOS(.v26),
+        .iOS(.v26)
     ],
     products: [
-        .executable(name: "ClubCalendar", targets: ["ClubCalendar"])
+        // The macOS executable's product (binary) name stays "ClubCalendar"
+        // so the user-facing .app bundle is unchanged. The SPM target is
+        // renamed for symmetry with the iOS Xcode target (ClubCalendarIOS).
+        .executable(name: "ClubCalendar", targets: ["ClubCalendarMac"]),
+        .library(name: "ClubCalendarCore", targets: ["ClubCalendarCore"])
     ],
     dependencies: [
         .package(url: "https://github.com/nalexn/ViewInspector.git", from: "0.10.0"),
         .package(url: "https://github.com/pointfreeco/swift-snapshot-testing.git", from: "1.15.0")
     ],
     targets: [
-        .executableTarget(
-            name: "ClubCalendar",
+        .target(
+            name: "ClubCalendarCore",
             dependencies: [],
-            path: "ClubCalendar",
+            path: "ClubCalendarCore",
+            swiftSettings: [
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
+        ),
+        .executableTarget(
+            name: "ClubCalendarMac",
+            dependencies: ["ClubCalendarCore"],
+            path: "ClubCalendar-macOS/Sources",
             resources: [
                 .process("Resources")
             ],
@@ -27,13 +40,14 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "ClubCalendarTests",
+            name: "ClubCalendarMacTests",
             dependencies: [
-                "ClubCalendar",
+                "ClubCalendarMac",
+                "ClubCalendarCore",
                 .product(name: "ViewInspector", package: "ViewInspector"),
                 .product(name: "SnapshotTesting", package: "swift-snapshot-testing")
             ],
-            path: "ClubCalendarTests"
+            path: "ClubCalendar-macOS/Tests"
         )
     ]
 )

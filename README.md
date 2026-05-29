@@ -34,7 +34,7 @@ Requires macOS 26+ and Swift 6.2 (Xcode 26).
 
 ## Setup
 
-1. **Get Strava API credentials** at [strava.com/settings/api](https://www.strava.com/settings/api). Use `clubcalendar://callback` as the Authorization Callback Domain (or `localhost` if Strava demands a bare hostname — both work in practice; see auth notes below). Note your Client ID and Client Secret.
+1. **Get Strava API credentials** at [strava.com/settings/api](https://www.strava.com/settings/api). Strava allows one API application per account — the same one serves both the macOS and iOS apps. Set its **Authorization Callback Domain** to `callback` (a bare host, no scheme or slashes) — this must match the host of the app's `clubcalendar://callback` redirect URI. Note your Client ID and Client Secret.
 2. **Launch the app** — onboarding will walk you through entering credentials, authenticating with Strava, picking clubs to sync, and granting Calendar access.
 
 Credentials and OAuth tokens are stored in the macOS Keychain (data-protection-style legacy file keychain — see [keychain notes](#why-the-legacy-file-keychain)).
