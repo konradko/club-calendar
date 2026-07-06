@@ -22,15 +22,28 @@ Native SwiftUI, no background daemons, no third-party runtime dependencies.
 
 Grab the latest DMG from [Releases](https://github.com/konradko/club-calendar/releases), open it, drag **Club Calendar** to Applications, and launch.
 
+> **First launch:** the app is self-signed (not notarized), so Gatekeeper
+> blocks a downloaded copy with "Apple could not verify...". Open **System
+> Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
+> This is needed once per install. Locally built apps (`make macos-dev`,
+> `make macos-dmg`) launch without this step since they carry no quarantine
+> attribute.
+
 ### Build from source
 
 ```bash
 git clone https://github.com/konradko/club-calendar
 cd club-calendar
-make dmg
+make macos-dmg
 ```
 
 Requires macOS 26+ and Swift 6.2 (Xcode 26).
+
+### iOS
+
+There's also an iOS app sharing the same `ClubCalendarCore` logic. See
+[docs/ios-app.md](docs/ios-app.md) for how it's built and how it works, and
+[docs/ios-install.md](docs/ios-install.md) to put it on your iPhone.
 
 ## Setup
 
@@ -71,14 +84,31 @@ Sync flow: `SyncService.sync()` → `StravaService.getEventsForClubs(...)` (para
 ## Development
 
 ```bash
-make dev      # build debug, bundle, sign, open
-make test     # run XCTest / swift-testing suite
-make restart  # kill, rebuild, reopen
-make logs     # stream unified logs (subsystem com.clubcalendar.app)
-make dmg      # signed release DMG with /Applications shortcut
+make macos-dev      # build debug, bundle, sign, open
+make test           # run the full test matrix (macOS + iOS)
+make macos-test     # macOS/Core tests only (FILTER=X narrows to matching tests)
+make macos-restart  # kill, rebuild, reopen
+make macos-logs     # stream unified logs (subsystem com.clubcalendar.app)
+make macos-dmg      # signed release DMG with /Applications shortcut
+make lint           # swift-format lint (config in .swift-format)
 ```
 
-The dev signing cert is created locally by `scripts/create-dev-cert.sh` — `make setup-cert` regenerates it. Keychain ACLs are tied to the signing identity, so a stable dev cert means no repeated keychain prompts.
+Run `make help` for the full target list.
+
+### Permissions across installs and updates
+
+macOS ties both the Calendar (TCC) grant and keychain-item ACLs to the app's
+signing identity. All builds are therefore signed with one stable self-signed
+certificate, created on first build by `scripts/create-dev-cert.sh` (via
+`make macos-setup-cert`, valid 10 years). As long as that identity is stable,
+you grant Calendar access once and never see keychain prompts, across
+rebuilds, updates, and reinstalls.
+
+If the identity ever rotates (cert deleted or expired), expect a one-time
+Calendar re-prompt and per-item keychain dialogs; click **Always Allow**, or
+run `make macos-reset-all` to start clean. Signing intentionally has no
+ad-hoc fallback: a missing cert fails the build rather than silently
+producing an app that resets your permissions.
 
 ### Why the legacy file keychain
 
