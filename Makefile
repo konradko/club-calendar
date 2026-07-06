@@ -1,9 +1,9 @@
-.PHONY: help clean \
+.PHONY: help clean test lint format \
         macos-build macos-build-debug macos-test macos-test-verbose macos-run macos-dev macos-open \
         macos-open-release macos-logs macos-bundle macos-bundle-debug macos-sign macos-dmg \
         macos-release macos-kill macos-restart macos-setup-cert macos-reset-calendar \
         macos-reset-all macos-open-calendar-settings \
-        ios-gen ios-build ios-test ios-test-verbose ios-coverage ios-run ios-clean \
+        ios-gen ios-build ios-test ios-test-suite ios-test-verbose ios-coverage ios-run ios-clean \
         ios-archive ios-install-device ios-logs
 
 # ============================================================================
@@ -25,8 +25,11 @@ MACOS_APP_PATH_DEBUG = $(MACOS_BUILD_DIR_DEBUG)/$(APP_NAME).app
 MACOS_DEV_CERT_NAME = ClubCalendar Development
 MACOS_ENTITLEMENTS = $(MACOS_SRC_DIR)/Resources/ClubCalendar.entitlements
 
-# Function to resolve the codesigning identity at runtime
-get_sign_identity = $(shell security find-identity -v -p codesigning 2>/dev/null | grep -q "$(MACOS_DEV_CERT_NAME)" && echo '"$(MACOS_DEV_CERT_NAME)"' || echo '-')
+# Signing always uses the stable dev cert (created by macos-setup-cert, a
+# prerequisite of every signing target). No ad-hoc fallback: a build signed
+# with a one-off identity resets the calendar (TCC) grant and orphans the
+# keychain items on the next install/update, so a missing or expired cert
+# must fail the build loudly instead.
 
 # ============================================================================
 # iOS config
@@ -63,9 +66,11 @@ macos-build:
 macos-build-debug:
 	swift build -c debug
 
-# Run SPM tests (ClubCalendarMac + ClubCalendarCore via ClubCalendarMacTests)
+# Run SPM tests (ClubCalendarMac + ClubCalendarCore via ClubCalendarMacTests).
+# Narrow to matching suites/tests via FILTER (regex on the fully-qualified
+# test name), e.g. `make macos-test FILTER=StravaService`.
 macos-test:
-	swift test
+	swift test $(if $(FILTER),--filter '$(FILTER)')
 
 # Run tests with verbose output
 macos-test-verbose:
@@ -103,8 +108,8 @@ macos-bundle-debug: macos-build-debug macos-setup-cert
 	@cp "$(MACOS_SRC_DIR)/Resources/icon_menubarTemplate.png" "$(MACOS_APP_PATH_DEBUG)/Contents/Resources/"
 	@cp "$(MACOS_SRC_DIR)/Resources/icon_menubarTemplate@2x.png" "$(MACOS_APP_PATH_DEBUG)/Contents/Resources/"
 	@$(call create_plist,$(MACOS_APP_PATH_DEBUG))
-	@echo "Signing app with identity: $(call get_sign_identity)"
-	@codesign --force --deep --sign $(call get_sign_identity) --entitlements $(MACOS_ENTITLEMENTS) "$(MACOS_APP_PATH_DEBUG)"
+	@echo "Signing app with identity: $(MACOS_DEV_CERT_NAME)"
+	@codesign --force --deep --sign "$(MACOS_DEV_CERT_NAME)" --entitlements $(MACOS_ENTITLEMENTS) "$(MACOS_APP_PATH_DEBUG)"
 	@echo "Debug app ready at $(MACOS_APP_PATH_DEBUG)"
 
 # Create release app bundle
@@ -121,8 +126,8 @@ macos-bundle: macos-build
 
 # Sign the release app (ensures dev certificate exists)
 macos-sign: macos-bundle macos-setup-cert
-	@echo "Signing app with identity: $(call get_sign_identity)"
-	codesign --force --deep --sign $(call get_sign_identity) --entitlements $(MACOS_ENTITLEMENTS) "$(MACOS_APP_PATH_RELEASE)"
+	@echo "Signing app with identity: $(MACOS_DEV_CERT_NAME)"
+	codesign --force --deep --sign "$(MACOS_DEV_CERT_NAME)" --entitlements $(MACOS_ENTITLEMENTS) "$(MACOS_APP_PATH_RELEASE)"
 	@echo "App signed successfully"
 
 # Create DMG installer with an /Applications shortcut for drag-install
@@ -241,16 +246,36 @@ ios-build: ios-gen
 # without popping a UI prompt that would wedge the test runner, and so the
 # real-EventKit integration tests in CalendarServiceIntegrationTests can
 # actually write to the store.
-ios-test: ios-gen
-	@DEVICE_ID=$$(xcrun simctl list devices available | grep -E "$(IOS_SIM_DEVICE) \(" | head -1 | sed -E 's/.*\(([A-F0-9-]+)\).*/\1/'); \
+# Resolves $$DEVICE_ID for the configured simulator, boots it, and grants
+# Calendar permission. Shared by ios-test / ios-test-suite / ios-run.
+define resolve_sim_device
+	DEVICE_ID=$$(xcrun simctl list devices available | grep -E "$(IOS_SIM_DEVICE) \(" | head -1 | sed -E 's/.*\(([A-F0-9-]+)\).*/\1/'); \
 	if [ -z "$$DEVICE_ID" ]; then echo "Simulator '$(IOS_SIM_DEVICE)' not found"; exit 1; fi; \
 	xcrun simctl boot $$DEVICE_ID 2>/dev/null || true; \
-	xcrun simctl privacy $$DEVICE_ID grant calendar $(IOS_BUNDLE_ID); \
+	xcrun simctl privacy $$DEVICE_ID grant calendar $(IOS_BUNDLE_ID)
+endef
+
+ios-test: ios-gen
+	@$(resolve_sim_device); \
 	xcodebuild test \
 		-project $(IOS_PROJECT) \
 		-scheme $(IOS_SCHEME) \
 		-destination "platform=iOS Simulator,id=$$DEVICE_ID" \
 		-enableCodeCoverage YES \
+		$(IOS_SIM_SIGNING)
+
+# Run a single test suite quickly (no coverage), e.g.
+# `make ios-test-suite SUITE=CalendarServiceIntegrationTests`.
+# Note: -only-testing matches swift-testing @Suite types at the suite level;
+# function-level identifiers silently match nothing.
+ios-test-suite: ios-gen
+	@if [ -z "$(SUITE)" ]; then echo "Usage: make ios-test-suite SUITE=<TestSuiteTypeName>"; exit 1; fi
+	@$(resolve_sim_device); \
+	xcodebuild test \
+		-project $(IOS_PROJECT) \
+		-scheme $(IOS_SCHEME) \
+		-destination "platform=iOS Simulator,id=$$DEVICE_ID" \
+		-only-testing:ClubCalendarIOSTests/$(SUITE) \
 		$(IOS_SIM_SIGNING)
 
 # Verbose iOS tests (full xcodebuild output)
@@ -321,6 +346,22 @@ ios-install-device: ios-archive
 # Shared
 # ============================================================================
 
+# All Swift sources (excludes the generated Xcode project)
+SWIFT_SOURCE_DIRS = ClubCalendarCore ClubCalendar-macOS ClubCalendar-iOS/Sources ClubCalendar-iOS/Tests
+
+# Run the full test matrix (what CLAUDE.md requires before reporting done)
+test: macos-test ios-test
+
+# Lint with the toolchain's swift-format (config in .swift-format).
+# The pre-existing codebase still carries legacy findings; run `make format`
+# once and commit to adopt a clean baseline.
+lint:
+	swift format lint --recursive $(SWIFT_SOURCE_DIRS)
+
+# Rewrite sources in place with the canonical format
+format:
+	swift format --in-place --recursive $(SWIFT_SOURCE_DIRS)
+
 # Clean build artifacts (both platforms)
 clean:
 	swift package clean
@@ -362,6 +403,7 @@ help:
 	@echo "  make ios-gen                 Regenerate Xcode project from project.yml"
 	@echo "  make ios-build               Build iOS debug for simulator"
 	@echo "  make ios-test                Run iOS unit tests with coverage"
+	@echo "  make ios-test-suite SUITE=X  Run one iOS test suite (fast, no coverage)"
 	@echo "  make ios-coverage            Print iOS coverage report (runs ios-test first)"
 	@echo "  make ios-run                 Build + boot simulator + install + launch"
 	@echo "  make ios-logs                Stream iOS app logs from booted simulator"
@@ -370,5 +412,9 @@ help:
 	@echo "  make ios-clean               Remove iOS build artifacts"
 	@echo ""
 	@echo "Shared:"
+	@echo "  make test                    Run the full test matrix (macOS + iOS)"
+	@echo "  make macos-test FILTER=X     Run matching macOS tests only (regex)"
+	@echo "  make lint                    swift-format lint over all Swift sources"
+	@echo "  make format                  Rewrite sources with canonical formatting"
 	@echo "  make clean                   Remove all build artifacts (macOS + iOS)"
 	@echo "  make help                    Show this help"

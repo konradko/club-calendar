@@ -19,6 +19,25 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "$CERT_NAME"; 
     exit 0
 fi
 
+# No *valid* identity — but an expired or broken cert with the same name may
+# still be lingering (find-identity -v lists valid identities only). Purge
+# stale copies first: a duplicate CN makes `codesign --sign "$CERT_NAME"`
+# ambiguous, and signing with a *different* identity than the previous build
+# resets the calendar (TCC) grant and orphans the app's keychain items.
+PURGED=0
+while security find-certificate -c "$CERT_NAME" "$KEYCHAIN" >/dev/null 2>&1; do
+    security delete-certificate -c "$CERT_NAME" "$KEYCHAIN" 2>/dev/null || break
+    PURGED=$((PURGED + 1))
+    [ "$PURGED" -ge 10 ] && break
+done
+if [ "$PURGED" -gt 0 ]; then
+    echo "Removed $PURGED stale/expired '$CERT_NAME' certificate(s)."
+    echo "NOTE: the signing identity is rotating. On next launch macOS will"
+    echo "re-prompt once for Calendar access, and old keychain items may ask"
+    echo "'ClubCalendar wants to access ...' — click Always Allow, or run"
+    echo "'make macos-reset-all' to start clean (requires re-onboarding)."
+fi
+
 echo "Creating development certificate..."
 
 TMPDIR=$(mktemp -d)
@@ -41,8 +60,11 @@ EOF
 
 openssl genrsa -out "$TMPDIR/key.pem" 2048 2>/dev/null
 openssl req -new -key "$TMPDIR/key.pem" -out "$TMPDIR/cert.csr" -config "$TMPDIR/cert.conf" 2>/dev/null
+# 10-year validity: when this cert expires, every build silently rotates to a
+# new identity, which resets the TCC calendar grant and triggers a keychain
+# prompt per stored item. Long validity keeps installs and updates seamless.
 openssl x509 -req -in "$TMPDIR/cert.csr" -signkey "$TMPDIR/key.pem" -out "$TMPDIR/cert.pem" \
-    -days 365 -extfile "$TMPDIR/cert.conf" -extensions codesign 2>/dev/null
+    -days 3650 -extfile "$TMPDIR/cert.conf" -extensions codesign 2>/dev/null
 
 openssl pkcs12 -export \
     -legacy \
