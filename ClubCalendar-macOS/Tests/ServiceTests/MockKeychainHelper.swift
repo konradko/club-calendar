@@ -4,6 +4,10 @@ import Foundation
 
 /// Mock keychain helper for testing services without actual keychain access.
 final class MockKeychainHelper: KeychainHelperProtocol, @unchecked Sendable {
+    /// Mirrors `KeychainHelper.tokenExpiryBuffer`: tokens are treated as
+    /// expired this many seconds before their actual expiry.
+    private static let tokenExpiryBuffer: TimeInterval = 5 * 60
+
     private let lock = NSLock()
     private var storage: [String: String] = [:]
     private var dataStorage: [String: Data] = [:]
@@ -63,7 +67,7 @@ final class MockKeychainHelper: KeychainHelperProtocol, @unchecked Sendable {
         }
 
         let expiryDate = Date(timeIntervalSince1970: expiryTimestamp)
-        guard expiryDate > Date().addingTimeInterval(300) else {
+        guard expiryDate > Date().addingTimeInterval(Self.tokenExpiryBuffer) else {
             return nil
         }
 

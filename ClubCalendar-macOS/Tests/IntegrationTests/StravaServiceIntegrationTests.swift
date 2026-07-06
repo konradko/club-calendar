@@ -13,7 +13,7 @@ struct StravaServiceIntegrationTests {
     func tokenExchangeWithValidCode() async throws {
         // Set up mock keychain with credentials
         let mockKeychain = MockKeychainHelper()
-        try await mockKeychain.setCredentials(clientId: "test_client_id", clientSecret: "test_client_secret")
+        try mockKeychain.setCredentials(clientId: "test_client_id", clientSecret: "test_client_secret")
 
         // Set up mock response
         let tokenURL = URL(string: "https://www.strava.com/oauth/token")!
@@ -191,6 +191,58 @@ struct StravaServiceIntegrationTests {
         // Verify expiry date conversion
         let expiryDate = Date(timeIntervalSince1970: TimeInterval(response.expiresAt))
         #expect(expiryDate > Date(timeIntervalSince1970: 0))
+    }
+
+    // MARK: - Token Refresh Concurrency Tests
+
+    @Test("Concurrent club fetches share a single token refresh")
+    func concurrentFetchesShareSingleTokenRefresh() async throws {
+        // Hold every mock response in flight long enough that all club
+        // fetches hit getValidToken() while the first refresh is pending.
+        let refreshHoldTime = Duration.milliseconds(50)
+        let tokenLifetime: TimeInterval = 3600
+        let clubIds = [1, 2, 3, 4, 5]
+
+        let mockKeychain = MockKeychainHelper()
+        try mockKeychain.setCredentials(clientId: "test_client_id", clientSecret: "test_client_secret")
+        try mockKeychain.setAuthenticatedState(
+            accessToken: "expired_token",
+            refreshToken: "valid_refresh_token",
+            expiresAt: Date().addingTimeInterval(-tokenLifetime)
+        )
+
+        let mockSession = MockURLSession()
+        mockSession.responseDelay = refreshHoldTime
+
+        let tokenURL = URL(string: "https://www.strava.com/oauth/token")!
+        let newExpiry = Int(Date().addingTimeInterval(tokenLifetime).timeIntervalSince1970)
+        mockSession.setMockJSONResponse(for: tokenURL, json: """
+        {
+            "access_token": "fresh_token",
+            "refresh_token": "next_refresh_token",
+            "expires_at": \(newExpiry)
+        }
+        """)
+
+        for clubId in clubIds {
+            let eventsURL = URL(string: "https://www.strava.com/api/v3/clubs/\(clubId)/group_events")!
+            mockSession.setMockJSONResponse(for: eventsURL, json: "[]")
+        }
+
+        let service = StravaService(keychain: mockKeychain, session: mockSession)
+        let events = await service.getEventsForClubs(clubIds)
+
+        #expect(events.isEmpty)
+
+        let tokenRequests = mockSession.capturedRequests.filter { $0.url == tokenURL }
+        #expect(tokenRequests.count == 1, "All concurrent fetches should share one refresh")
+        #expect(mockSession.capturedRequests.count == clubIds.count + 1)
+
+        // Every club fetch should carry the refreshed token.
+        let clubRequests = mockSession.capturedRequests.filter { $0.url != tokenURL }
+        for request in clubRequests {
+            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fresh_token")
+        }
     }
 
     // MARK: - Mock Session Tests

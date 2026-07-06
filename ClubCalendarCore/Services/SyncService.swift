@@ -163,7 +163,7 @@ public final class SyncService {
             Logger.sync.info("Fetching events for \(clubIds.count) club(s)")
 
             // Fetch events from Strava
-            let events = try await stravaService.getEventsForClubs(clubIds)
+            let events = await stravaService.getEventsForClubs(clubIds)
             Logger.sync.info("Fetched \(events.count) event(s) from Strava")
 
             // Sync to calendar

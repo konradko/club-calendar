@@ -52,6 +52,10 @@ public actor StravaService {
     private let session: URLSessionProtocol
     private let decoder: JSONDecoder
 
+    /// In-flight token refresh, shared by concurrent callers so a fan-out of
+    /// requests (e.g. one per club) triggers a single refresh instead of one each.
+    private var refreshTask: Task<String, Error>?
+
     public init(
         keychain: any KeychainHelperProtocol = KeychainHelper.shared,
         session: URLSessionProtocol = URLSession.shared
@@ -151,11 +155,19 @@ public actor StravaService {
     }
 
     /// Gets a valid access token, refreshing if necessary.
+    /// The actor is re-entrant across `await`, so concurrent callers join the
+    /// in-flight refresh rather than each starting their own.
     private func getValidToken() async throws -> String {
         if let token = keychain.getValidAccessToken() {
             return token
         }
-        return try await refreshAccessToken()
+        if let refreshTask {
+            return try await refreshTask.value
+        }
+        let task = Task { try await refreshAccessToken() }
+        refreshTask = task
+        defer { refreshTask = nil }
+        return try await task.value
     }
 
     // MARK: - API Methods
@@ -187,7 +199,7 @@ public actor StravaService {
 
     /// Fetches events for multiple clubs in parallel.
     /// Per-club failures are logged but don't abort the whole batch.
-    public func getEventsForClubs(_ clubIds: [Int]) async throws -> [ClubEvent] {
+    public func getEventsForClubs(_ clubIds: [Int]) async -> [ClubEvent] {
         await withTaskGroup(of: [ClubEvent].self) { group in
             for clubId in clubIds {
                 group.addTask { [weak self] in
