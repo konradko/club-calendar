@@ -50,12 +50,28 @@ public actor CalendarService {
     /// Window for upcoming events shown in the menu bar.
     private static let upcomingEventsWindow: TimeInterval = 30 * 24 * 60 * 60
 
+    /// Title prefix marking events that disappeared from Strava.
+    private static let cancelledPrefix = "[CANCELLED]"
+
+    /// EKEventStore persists dates with whole-second precision, so a stored
+    /// start date can differ from the source by a fraction of a second.
+    /// Treat differences below this as equal or every sync would rewrite
+    /// every event whose source date has sub-second precision.
+    private static let startDateTolerance: TimeInterval = 1
+
     private let eventStore: EKEventStore
-    private let calendarName: String
+    private var calendarName: String
 
     public init(calendarName: String = "Club Calendar") {
         self.eventStore = EKEventStore()
         self.calendarName = calendarName
+    }
+
+    /// Points future syncs and lookups at a different calendar. Call when the
+    /// user changes the target calendar in settings: the service is created
+    /// once at launch, so the initializer's name would otherwise go stale.
+    public func setCalendarName(_ name: String) {
+        calendarName = name
     }
 
     // MARK: - Access Management
@@ -137,10 +153,7 @@ public actor CalendarService {
 
     /// Gets all available calendar names.
     public func getAvailableCalendarNames() -> [String] {
-        eventStore.calendars(for: .event)
-            .filter { $0.allowsContentModifications }
-            .sorted { $0.title < $1.title }
-            .map(\.title)
+        getAvailableCalendars().map(\.title)
     }
 
     /// Gets a calendar by name.
@@ -220,8 +233,10 @@ public actor CalendarService {
         for (stravaId, existingEvent) in existingByStravaId {
             guard existingEvent.startDate >= now else { continue }
             if !activeStravaIds.contains(stravaId) {
-                if !existingEvent.title.hasPrefix("[CANCELLED]") {
-                    existingEvent.title = "[CANCELLED] \(existingEvent.title ?? "")"
+                // `title` is implicitly-unwrapped and can be nil for events the
+                // user hollowed out by hand, so avoid the force-unwrap.
+                if existingEvent.title?.hasPrefix(Self.cancelledPrefix) != true {
+                    existingEvent.title = "\(Self.cancelledPrefix) \(existingEvent.title ?? "")"
                     do {
                         try eventStore.save(existingEvent, span: .thisEvent)
                         cancelled += 1
@@ -259,7 +274,10 @@ public actor CalendarService {
             changed = true
         }
 
-        if event.startDate != clubEvent.startDatetime {
+        let startUnchanged = event.startDate
+            .map { abs($0.timeIntervalSince(clubEvent.startDatetime)) < Self.startDateTolerance }
+            ?? false
+        if !startUnchanged {
             event.startDate = clubEvent.startDatetime
             event.endDate = clubEvent.startDatetime.addingTimeInterval(Self.defaultEventDuration)
             changed = true
@@ -267,6 +285,14 @@ public actor CalendarService {
 
         if event.location != clubEvent.address {
             event.location = clubEvent.address
+            changed = true
+        }
+
+        // EKEvent normalizes empty notes to nil, so coalesce before comparing
+        // or unchanged events would report as updated on every sync.
+        let newNotes = buildEventNotes(from: clubEvent)
+        if (event.notes ?? "") != newNotes {
+            event.notes = newNotes
             changed = true
         }
 
@@ -376,8 +402,11 @@ public actor CalendarService {
             calendars: [calendar]
         )
 
+        // `events(matching:)` returns results in no particular order, so sort
+        // before taking `limit` to keep the soonest events, not arbitrary ones.
         return eventStore.events(matching: predicate)
-            .filter { !$0.title.hasPrefix("[CANCELLED]") }
+            .filter { $0.title?.hasPrefix(Self.cancelledPrefix) != true }
+            .sorted { $0.startDate < $1.startDate }
             .prefix(limit)
             .map { CalendarEventData(from: $0) }
     }

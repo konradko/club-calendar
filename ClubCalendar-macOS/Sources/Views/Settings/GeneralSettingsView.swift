@@ -56,6 +56,11 @@ struct GeneralSettingsView: View {
                         Text(name).tag(name)
                     }
                 }
+                .onChange(of: settings.calendarName) { _, newName in
+                    Task {
+                        await appState.changeCalendar(to: newName)
+                    }
+                }
             }
 
             // Display Settings

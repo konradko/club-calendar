@@ -112,8 +112,10 @@ struct CalendarServiceIntegrationTests {
         _ = try await service.syncEvents(events)
         let second = try await service.syncEvents(events)
 
-        // The second sync should not create new events for the same Strava IDs.
+        // The second sync should not create new events for the same Strava IDs,
+        // and identical data must not report update churn either.
         #expect(second.created == 0)
+        #expect(second.updated == 0)
     }
 
     @Test func syncEvents_marks_missing_future_events_cancelled() async throws {
@@ -151,6 +153,84 @@ struct CalendarServiceIntegrationTests {
         // Only the non-cancelled future event survives.
         #expect(upcoming.contains { $0.title.contains("Morning Ride") })
         #expect(!upcoming.contains { $0.title.hasPrefix("[CANCELLED]") })
+    }
+
+    @Test func getUpcomingEvents_returns_events_sorted_by_start_date() async throws {
+        if await skipIfNoCalendarAccess() {
+            return
+        }
+        let calendarName = Self.makeCalendarName()
+        let service = CalendarService(calendarName: calendarName)
+        defer { Task { @MainActor in await cleanup(calendarName: calendarName) } }
+
+        // Sync in reverse chronological order; the store's return order is
+        // undefined, so only the service's own sort makes this deterministic.
+        let events = Self.makeFixtureEvents(now: Date())
+        _ = try await service.syncEvents(Array(events.reversed()))
+
+        let upcoming = await service.getUpcomingEvents(limit: 10)
+        let starts = upcoming.map(\.startDate)
+        #expect(starts == starts.sorted())
+        #expect(upcoming.first?.title.contains("Morning Ride") == true)
+    }
+
+    @Test func setCalendarName_redirects_subsequent_syncs() async throws {
+        if await skipIfNoCalendarAccess() {
+            return
+        }
+        let firstName = Self.makeCalendarName()
+        let secondName = Self.makeCalendarName()
+        let service = CalendarService(calendarName: firstName)
+        defer {
+            Task { @MainActor in
+                await cleanup(calendarName: firstName)
+                await cleanup(calendarName: secondName)
+            }
+        }
+
+        let events = Self.makeFixtureEvents(now: Date())
+        _ = try await service.syncEvents([events[0]])
+
+        await service.setCalendarName(secondName)
+        let result = try await service.syncEvents([events[1]])
+        #expect(result.created == 1)
+
+        // Lookups now target the new calendar, which holds only the second event.
+        let upcoming = await service.getUpcomingEvents(limit: 10)
+        #expect(upcoming.count == 1)
+        #expect(upcoming.first?.title.contains("Hill Repeats") == true)
+    }
+
+    @Test func syncEvents_updates_notes_when_description_changes() async throws {
+        if await skipIfNoCalendarAccess() {
+            return
+        }
+        let calendarName = Self.makeCalendarName()
+        let service = CalendarService(calendarName: calendarName)
+        defer { Task { @MainActor in await cleanup(calendarName: calendarName) } }
+
+        let original = Self.makeFixtureEvents(now: Date())[0]
+        _ = try await service.syncEvents([original])
+
+        let edited = ClubEvent(
+            id: original.id,
+            title: original.title,
+            clubName: original.clubName,
+            clubId: original.clubId,
+            description: "Route changed: meet at the bridge",
+            activityType: original.activityType,
+            startDatetime: original.startDatetime,
+            address: original.address,
+            privateEvent: original.privateEvent,
+            organizingAthlete: original.organizingAthlete,
+            routeId: original.routeId
+        )
+        let result = try await service.syncEvents([edited])
+        #expect(result.updated == 1)
+
+        // Re-syncing identical data must not report churn.
+        let third = try await service.syncEvents([edited])
+        #expect(third.updated == 0)
     }
 
     // MARK: - cleanup

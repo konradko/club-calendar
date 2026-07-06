@@ -139,6 +139,14 @@ final class AppState {
         availableCalendarNames = await calendarService.getAvailableCalendarNames()
     }
 
+    /// Re-points the calendar service at the newly selected calendar and
+    /// re-syncs so events show up there immediately. Without this the service
+    /// keeps writing to the calendar chosen at launch until the app restarts.
+    func changeCalendar(to name: String) async {
+        await calendarService.setCalendarName(name)
+        await sync()
+    }
+
     // MARK: - Auth
 
     func authenticate() async {
