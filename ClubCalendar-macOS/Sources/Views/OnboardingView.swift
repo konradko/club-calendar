@@ -3,7 +3,6 @@ import ClubCalendarCore
 
 struct OnboardingView: View {
     @Environment(AppState.self) private var appState
-    @Environment(\.dismissWindow) private var dismissWindow
 
     @State private var currentStep = 0
     @State private var clientId = ""
@@ -311,7 +310,6 @@ struct OnboardingView: View {
 
     private func finishOnboarding() {
         appState.completeOnboarding()
-        dismissWindow(id: "onboarding")
     }
 }
 

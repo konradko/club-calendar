@@ -9,6 +9,11 @@ import UIKit
 #endif
 
 /// Handles OAuth authentication with Strava via ASWebAuthenticationSession.
+///
+/// Keychain-only members are `nonisolated @concurrent`: on macOS a keychain
+/// read can block inside a SecurityAgent ACL prompt (shown once per item
+/// after a signing-cert rotation), and blocking the main actor while the
+/// menu-bar menu is tracking freezes keyboard input system-wide.
 @MainActor
 public final class AuthService: NSObject {
     private let keychain: any KeychainHelperProtocol
@@ -26,7 +31,8 @@ public final class AuthService: NSObject {
     }
 
     /// The OAuth authorization URL for Strava.
-    private func authorizationURL() -> URL? {
+    @concurrent
+    private nonisolated func authorizationURL() async -> URL? {
         guard let clientId = keychain.getStringOrNil(for: .clientId) else {
             return nil
         }
@@ -46,7 +52,7 @@ public final class AuthService: NSObject {
     public func authenticate() async throws {
         Logger.auth.info("Starting OAuth authentication flow")
 
-        guard let url = authorizationURL() else {
+        guard let url = await authorizationURL() else {
             Logger.auth.error("No API credentials configured")
             throw AuthError.noCredentials
         }
@@ -103,17 +109,20 @@ public final class AuthService: NSObject {
     }
 
     /// Disconnects from Strava by clearing auth tokens.
-    public func disconnect() async throws {
+    @concurrent
+    public nonisolated func disconnect() async throws {
         try keychain.clearAuth()
     }
 
     /// Checks if user is authenticated.
-    public func isAuthenticated() async -> Bool {
+    @concurrent
+    public nonisolated func isAuthenticated() async -> Bool {
         keychain.isAuthenticated()
     }
 
     /// Gets the authenticated athlete's name.
-    public func getAthleteName() async -> String? {
+    @concurrent
+    public nonisolated func getAthleteName() async -> String? {
         keychain.getStringOrNil(for: .athleteName)
     }
 }

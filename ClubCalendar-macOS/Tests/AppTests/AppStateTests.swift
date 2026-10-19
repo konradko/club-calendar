@@ -12,7 +12,6 @@ struct AppStateTests {
     func appStateInitializesWithDefaults() {
         let appState = AppState()
 
-        #expect(appState.showOnboarding == false)
         #expect(appState.showSettings == false)
         #expect(appState.calendarAccessStatus == .notDetermined)
         #expect(appState.upcomingEvents.isEmpty)
@@ -35,17 +34,6 @@ struct AppStateTests {
     }
 
     // MARK: - State Property Tests
-
-    @Test("AppState showOnboarding can be set")
-    func appStateShowOnboarding() {
-        let appState = AppState()
-
-        appState.showOnboarding = true
-        #expect(appState.showOnboarding == true)
-
-        appState.showOnboarding = false
-        #expect(appState.showOnboarding == false)
-    }
 
     @Test("AppState showSettings can be set")
     func appStateShowSettings() {
@@ -169,12 +157,57 @@ struct AppStateTests {
     func completeOnboardingSetsFlag() {
         let appState = AppState()
         appState.settings.onboardingCompleted = false
-        appState.showOnboarding = true
 
         appState.completeOnboarding()
 
         #expect(appState.settings.onboardingCompleted == true)
-        #expect(appState.showOnboarding == false)
+    }
+
+    // MARK: - HealOnboardingFlag Tests
+
+    @Test("healOnboardingFlag completes onboarding on a configured install")
+    func healOnboardingFlagConfiguredInstall() {
+        let appState = AppState()
+        let original = appState.settings.onboardingCompleted
+        defer { appState.settings.onboardingCompleted = original }
+
+        appState.settings.onboardingCompleted = false
+        appState.isAuthenticated = true
+        appState.calendarAccessStatus = .authorized
+
+        appState.healOnboardingFlag()
+
+        #expect(appState.settings.onboardingCompleted == true)
+    }
+
+    @Test("healOnboardingFlag leaves an unauthenticated install alone")
+    func healOnboardingFlagUnauthenticated() {
+        let appState = AppState()
+        let original = appState.settings.onboardingCompleted
+        defer { appState.settings.onboardingCompleted = original }
+
+        appState.settings.onboardingCompleted = false
+        appState.isAuthenticated = false
+        appState.calendarAccessStatus = .authorized
+
+        appState.healOnboardingFlag()
+
+        #expect(appState.settings.onboardingCompleted == false)
+    }
+
+    @Test("healOnboardingFlag leaves an install without calendar access alone")
+    func healOnboardingFlagNoCalendarAccess() {
+        let appState = AppState()
+        let original = appState.settings.onboardingCompleted
+        defer { appState.settings.onboardingCompleted = original }
+
+        appState.settings.onboardingCompleted = false
+        appState.isAuthenticated = true
+        appState.calendarAccessStatus = .notDetermined
+
+        appState.healOnboardingFlag()
+
+        #expect(appState.settings.onboardingCompleted == false)
     }
 
     // MARK: - Sendable Conformance

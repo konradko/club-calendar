@@ -24,8 +24,8 @@ final class AppState {
     private var syncCompleteObserver: NSObjectProtocol?
 
     // UI State
-    var showOnboarding = false
     var showSettings = false
+    private var onboardingWindow: NSWindow?
     var calendarAccessStatus: CalendarAccessStatus = .notDetermined
     var upcomingEvents: [UpcomingEvent] = []
     var availableCalendarNames: [String] = []
@@ -85,11 +85,12 @@ final class AppState {
     func onAppear() async {
         Logger.app.info("App appeared, refreshing state")
         await refreshState()
+        healOnboardingFlag()
 
         // Show onboarding if not completed
         if !settings.onboardingCompleted {
             Logger.app.info("Onboarding not completed, showing setup")
-            showOnboarding = true
+            showOnboardingWindow()
         } else {
             Logger.app.info("Starting auto-sync (authenticated: \(self.isAuthenticated, privacy: .public), calendar: \(String(describing: self.calendarAccessStatus), privacy: .public))")
             // Start auto-sync on first appearance; on subsequent menu opens this
@@ -102,18 +103,25 @@ final class AppState {
     }
 
     /// Called each time the user opens the menu bar. Refreshes auth/calendar
-    /// state, triggers a sync if data is stale, and reloads the cached
-    /// upcoming events the menu renders from.
+    /// state and the cached upcoming events, then syncs if data is stale.
     func refreshOnMenuOpen() async {
-        guard settings.onboardingCompleted else { return }
         await refreshState()
+        // Reload before the sync, which can be slow: the menu must never
+        // render stale day groupings, even when onboarding is incomplete.
+        await refreshUpcomingEvents()
+        guard settings.onboardingCompleted else { return }
         await syncService.syncIfStale()
         await refreshUpcomingEvents()
     }
 
     /// Refreshes all state from keychain and services.
+    ///
+    /// Keychain reads stay off the main actor: after a signing-cert rotation
+    /// each read blocks inside a SecurityAgent ACL prompt, and a blocked main
+    /// thread while the menu is tracking freezes keyboard input system-wide.
     func refreshState() async {
-        hasAPICredentials = keychain.hasAPICredentials()
+        let keychain = self.keychain
+        hasAPICredentials = await Task.detached { keychain.hasAPICredentials() }.value
         isAuthenticated = await authService.isAuthenticated()
         athleteName = await authService.getAthleteName()
         calendarAccessStatus = await calendarService.checkAccessStatus()
@@ -229,9 +237,40 @@ final class AppState {
 
     // MARK: - Onboarding
 
+    /// Presents onboarding in an AppKit window. A SwiftUI Window scene is not
+    /// an option here: on macOS 26.5, declaring one next to MenuBarExtra makes
+    /// the app terminate at launch before the status item appears.
+    func showOnboardingWindow() {
+        if onboardingWindow == nil {
+            let window = NSWindow(
+                contentViewController: NSHostingController(
+                    rootView: OnboardingView().environment(self)
+                )
+            )
+            window.title = "Welcome to Club Calendar"
+            window.styleMask = [.titled, .closable]
+            window.isReleasedWhenClosed = false
+            window.center()
+            onboardingWindow = window
+        }
+        onboardingWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+    }
+
+    /// Marks onboarding complete when the install is already configured
+    /// (authenticated with calendar access). A missing flag would otherwise
+    /// disable auto-sync and menu refresh on a working install.
+    func healOnboardingFlag() {
+        guard !settings.onboardingCompleted else { return }
+        guard isAuthenticated && calendarAccessStatus == .authorized else { return }
+        Logger.app.info("Configured install without onboarding flag, marking complete")
+        settings.onboardingCompleted = true
+    }
+
     func completeOnboarding() {
         settings.onboardingCompleted = true
-        showOnboarding = false
+        onboardingWindow?.close()
+        onboardingWindow = nil
         syncService.startAutoSync()
 
         Task {

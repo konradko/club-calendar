@@ -7,21 +7,33 @@ import ClubCalendarCore
 struct ClubCalendarApp: App {
     @State private var appState = AppState()
 
+    // Force the status item into the menu bar on every launch. Without the
+    // isInserted binding, MenuBarExtra terminates the app when the system
+    // reports the item as removed (e.g. after the icon was command-dragged
+    // off the menu bar), which made every subsequent launch exit instantly.
+    @State private var menuBarInserted = true
+
     init() {
         Logger.app.info("Club Calendar launching")
     }
 
     var body: some Scene {
         // Menu bar
-        MenuBarExtra {
+        MenuBarExtra(isInserted: $menuBarInserted) {
             MenuBarView()
                 .environment(appState)
         } label: {
-            if appState.syncService.syncInProgress {
-                Image(systemName: "arrow.triangle.2.circlepath")
-            } else {
-                Image(nsImage: menuBarIcon)
+            Group {
+                if appState.syncService.syncInProgress {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                } else {
+                    Image(nsImage: menuBarIcon)
+                }
             }
+            // On macOS 26.5 the menu content view does not appear at launch,
+            // so its .task cannot drive startup. The label is visible from
+            // launch, so app startup hooks here.
+            .task { await appState.onAppear() }
         }
         .menuBarExtraStyle(.menu)
 
@@ -31,13 +43,9 @@ struct ClubCalendarApp: App {
                 .environment(appState)
         }
 
-        // Onboarding window
-        Window("Welcome to Club Calendar", id: "onboarding") {
-            OnboardingView()
-                .environment(appState)
-        }
-        .windowResizability(.contentSize)
-        .defaultPosition(.center)
+        // Onboarding is an AppKit window owned by AppState, not a Window
+        // scene: on macOS 26.5 a Window scene declared next to MenuBarExtra
+        // makes the app terminate at launch before the status item appears.
     }
 
     private var menuBarIcon: NSImage {

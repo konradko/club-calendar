@@ -85,6 +85,14 @@ struct MenuBarView: View {
 
     @ViewBuilder
     private var syncStatusSection: some View {
+        // A silently failing sync looks identical to a healthy one, so
+        // surface the last error next to the sync status.
+        if let error = appState.syncService.lastSyncError {
+            Text("⚠️ Sync failed: \(error.localizedDescription)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+
         if let lastSync = appState.syncService.lastSyncTimeFormatted {
             Text("Last synced: \(lastSync)")
                 .font(.caption)
