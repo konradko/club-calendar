@@ -26,3 +26,6 @@ ClubCalendar-iOS/Sources/Info.plist
 
 # Pixelmator source for icon
 icon.pxd
+
+# Claude Code session log
+.claude/prompt-history.jsonl
