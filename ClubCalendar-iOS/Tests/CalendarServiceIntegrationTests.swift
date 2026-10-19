@@ -136,6 +136,43 @@ struct CalendarServiceIntegrationTests {
         #expect(result.cancelled == 1)
     }
 
+    @Test func syncEvents_leaves_events_of_failed_clubs_unchanged() async throws {
+        if await skipIfNoCalendarAccess() {
+            return
+        }
+        let calendarName = Self.makeCalendarName()
+        let service = CalendarService(calendarName: calendarName)
+        defer { Task { @MainActor in await cleanup(calendarName: calendarName) } }
+
+        let now = Date()
+        let healthyClubEvent = Self.makeFixtureEvents(now: now)[0]
+        let otherClubId = 2002
+        let otherClubEvent = ClubEvent(
+            id: 9003,
+            title: "Track Night",
+            clubName: "Other Running Club",
+            clubId: otherClubId,
+            description: nil,
+            activityType: "running",
+            startDatetime: now.addingTimeInterval(10_800),
+            address: nil,
+            privateEvent: false,
+            organizingAthlete: nil,
+            routeId: nil
+        )
+        _ = try await service.syncEvents([healthyClubEvent, otherClubEvent])
+
+        // The other club's fetch failed, so its missing event is not a cancellation.
+        let partial = try await service.syncEvents([healthyClubEvent], failedClubIds: [otherClubId])
+        #expect(partial.cancelled == 0)
+        let afterPartial = await service.getUpcomingEvents(limit: 10)
+        #expect(afterPartial.contains { $0.title.contains("Track Night") && !$0.title.hasPrefix("[CANCELLED]") })
+
+        // Once the club fetches again and the event is really gone, it is cancelled.
+        let full = try await service.syncEvents([healthyClubEvent])
+        #expect(full.cancelled == 1)
+    }
+
     @Test func getUpcomingEvents_filters_cancelled_entries() async throws {
         if await skipIfNoCalendarAccess() {
             return

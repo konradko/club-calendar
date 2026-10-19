@@ -164,7 +164,12 @@ public actor CalendarService {
     // MARK: - Event Sync
 
     /// Syncs Strava events to the calendar.
-    public func syncEvents(_ clubEvents: [ClubEvent]) async throws -> SyncResult {
+    ///
+    /// Future calendar events missing from `clubEvents` are marked cancelled,
+    /// except events of clubs in `failedClubIds`: their fetch failed, so
+    /// their absence says nothing about the event. Events whose club cannot
+    /// be read from the stored URL are also left alone while any club failed.
+    public func syncEvents(_ clubEvents: [ClubEvent], failedClubIds: Set<Int> = []) async throws -> SyncResult {
         Logger.calendar.info("Syncing \(clubEvents.count) event(s) to calendar")
         let calendar = try getOrCreateCalendar()
         var created = 0
@@ -192,10 +197,12 @@ public actor CalendarService {
 
         // Build lookup of existing events by Strava ID (stored in URL)
         var existingByStravaId: [Int: EKEvent] = [:]
+        var clubIdByStravaId: [Int: Int] = [:]
         for event in existingEvents {
             if let url = event.url,
-               let stravaId = extractStravaId(from: url) {
-                existingByStravaId[stravaId] = event
+               let ref = parseStravaEventURL(url) {
+                existingByStravaId[ref.eventId] = event
+                clubIdByStravaId[ref.eventId] = ref.clubId
             }
         }
 
@@ -230,9 +237,15 @@ public actor CalendarService {
         // Mark future events as cancelled if they're no longer in Strava.
         // Past events stay untouched — Strava only returns upcoming events, so
         // their absence from `activeStravaIds` doesn't mean they were cancelled.
+        var skippedForFailedClubs = 0
         for (stravaId, existingEvent) in existingByStravaId {
             guard existingEvent.startDate >= now else { continue }
             if !activeStravaIds.contains(stravaId) {
+                let clubFetchSucceeded = clubIdByStravaId[stravaId].map { !failedClubIds.contains($0) } ?? false
+                if !failedClubIds.isEmpty, !clubFetchSucceeded {
+                    skippedForFailedClubs += 1
+                    continue
+                }
                 // `title` is implicitly-unwrapped and can be nil for events the
                 // user hollowed out by hand, so avoid the force-unwrap.
                 if existingEvent.title?.hasPrefix(Self.cancelledPrefix) != true {
@@ -245,6 +258,10 @@ public actor CalendarService {
                     }
                 }
             }
+        }
+
+        if skippedForFailedClubs > 0 {
+            Logger.calendar.warning("Left \(skippedForFailedClubs) event(s) unchanged: their club fetch failed")
         }
 
         let result = SyncResult(created: created, updated: updated, cancelled: cancelled)
@@ -370,19 +387,29 @@ public actor CalendarService {
     }
 
     private func extractStravaId(from url: URL) -> Int? {
-        // Accept both real format (clubs/{club_id}/group_events/{event_id})
-        // and the legacy Swift-app format (clubs/events/{event_id}) so events
-        // created by older builds are still recognized for dedup.
+        parseStravaEventURL(url)?.eventId
+    }
+
+    /// Reads the Strava event ID, and the club ID when present, from an event URL.
+    /// Accepts both the real format (clubs/{club_id}/group_events/{event_id})
+    /// and the legacy Swift-app format (clubs/events/{event_id}) so events
+    /// created by older builds are still recognized for dedup. Legacy URLs
+    /// carry no club ID.
+    private func parseStravaEventURL(_ url: URL) -> (clubId: Int?, eventId: Int)? {
         let path = url.pathComponents
         guard path.count >= 4,
-              let id = Int(path.last ?? "") else {
+              let eventId = Int(path.last ?? "") else {
             return nil
         }
         let parent = path[path.count - 2]
-        guard parent == "group_events" || parent == "events" else {
+        switch parent {
+        case "group_events":
+            return (clubId: Int(path[path.count - 3]), eventId: eventId)
+        case "events":
+            return (clubId: nil, eventId: eventId)
+        default:
             return nil
         }
-        return id
     }
 
     // MARK: - Upcoming Events

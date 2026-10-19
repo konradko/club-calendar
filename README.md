@@ -79,7 +79,7 @@ ClubCalendarApp (SwiftUI @main)
         └── SyncService             ← NSBackgroundActivityScheduler + wake notification
 ```
 
-Sync flow: `SyncService.sync()` → `StravaService.getEventsForClubs(...)` (parallel per club) → `CalendarService.syncEvents(...)` (dedup by Strava ID embedded in `EKEvent.url`, mark removed future events `[CANCELLED]`).
+Sync flow: `SyncService.sync()` → `StravaService.getEventsForClubs(...)` (parallel per club) → `CalendarService.syncEvents(...)` (dedup by Strava ID embedded in `EKEvent.url`, mark removed future events `[CANCELLED]`). Clubs whose fetch failed are skipped by the cancel step, so a network error never cancels their events.
 
 ## Development
 

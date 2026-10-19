@@ -37,6 +37,20 @@ public enum StravaError: Error, LocalizedError, Sendable {
     }
 }
 
+/// Events fetched for a set of clubs, plus the clubs whose fetch failed.
+public struct ClubEventsFetch: Sendable {
+    public let events: [ClubEvent]
+    public let failedClubIds: Set<Int>
+    /// The first error hit while fetching, nil when every club succeeded.
+    public let firstError: (any Error)?
+
+    public init(events: [ClubEvent], failedClubIds: Set<Int> = [], firstError: (any Error)? = nil) {
+        self.events = events
+        self.failedClubIds = failedClubIds
+        self.firstError = firstError
+    }
+}
+
 /// Protocol for URL session operations (for testing).
 public protocol URLSessionProtocol: Sendable {
     func data(for request: URLRequest) async throws -> (Data, URLResponse)
@@ -198,26 +212,40 @@ public actor StravaService {
     }
 
     /// Fetches events for multiple clubs in parallel.
-    /// Per-club failures are logged but don't abort the whole batch.
-    public func getEventsForClubs(_ clubIds: [Int]) async -> [ClubEvent] {
-        await withTaskGroup(of: [ClubEvent].self) { group in
+    /// Per-club failures are logged but don't abort the whole batch. The
+    /// failed clubs are reported in the result so callers do not mistake
+    /// a failed fetch for a club with no upcoming events.
+    public func getEventsForClubs(_ clubIds: [Int]) async -> ClubEventsFetch {
+        await withTaskGroup(of: (clubId: Int, outcome: Result<[ClubEvent], any Error>).self) { group in
             for clubId in clubIds {
                 group.addTask { [weak self] in
-                    guard let self else { return [] }
+                    guard let self else { return (clubId, .success([])) }
                     do {
-                        return try await self.getClubEvents(clubId: clubId)
+                        return (clubId, .success(try await self.getClubEvents(clubId: clubId)))
                     } catch {
                         Logger.strava.error("Failed to fetch events for club \(clubId): \(error.localizedDescription, privacy: .public)")
-                        return []
+                        return (clubId, .failure(error))
                     }
                 }
             }
 
             var allEvents: [ClubEvent] = []
-            for await events in group {
-                allEvents.append(contentsOf: events)
+            var failedClubIds: Set<Int> = []
+            var firstError: (any Error)?
+            for await (clubId, outcome) in group {
+                switch outcome {
+                case .success(let events):
+                    allEvents.append(contentsOf: events)
+                case .failure(let error):
+                    failedClubIds.insert(clubId)
+                    firstError = firstError ?? error
+                }
             }
-            return allEvents.sorted { $0.startDatetime < $1.startDatetime }
+            return ClubEventsFetch(
+                events: allEvents.sorted { $0.startDatetime < $1.startDatetime },
+                failedClubIds: failedClubIds,
+                firstError: firstError
+            )
         }
     }
 

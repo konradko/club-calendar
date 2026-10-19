@@ -230,9 +230,11 @@ struct StravaServiceIntegrationTests {
         }
 
         let service = StravaService(keychain: mockKeychain, session: mockSession)
-        let events = await service.getEventsForClubs(clubIds)
+        let fetch = await service.getEventsForClubs(clubIds)
 
-        #expect(events.isEmpty)
+        #expect(fetch.events.isEmpty)
+        #expect(fetch.failedClubIds.isEmpty)
+        #expect(fetch.firstError == nil)
 
         let tokenRequests = mockSession.capturedRequests.filter { $0.url == tokenURL }
         #expect(tokenRequests.count == 1, "All concurrent fetches should share one refresh")
@@ -243,6 +245,50 @@ struct StravaServiceIntegrationTests {
         for request in clubRequests {
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer fresh_token")
         }
+    }
+
+    // MARK: - Partial Failure Tests
+
+    @Test("getEventsForClubs reports clubs whose fetch failed and keeps the rest")
+    func getEventsForClubsReportsFailedClubs() async throws {
+        let tokenLifetime: TimeInterval = 3600
+        let healthyClubId = 10
+        let brokenClubId = 20
+        let serverErrorStatus = 503
+
+        let mockKeychain = MockKeychainHelper()
+        try mockKeychain.setCredentials(clientId: "test_client_id", clientSecret: "test_client_secret")
+        try mockKeychain.setAuthenticatedState(
+            accessToken: "valid_token",
+            refreshToken: "valid_refresh_token",
+            expiresAt: Date().addingTimeInterval(tokenLifetime)
+        )
+
+        let futureStart = ISO8601DateFormatter().string(from: Date().addingTimeInterval(tokenLifetime))
+        let mockSession = MockURLSession()
+        let healthyURL = URL(string: "https://www.strava.com/api/v3/clubs/\(healthyClubId)/group_events")!
+        mockSession.setMockJSONResponse(for: healthyURL, json: """
+        [{
+            "id": 555,
+            "title": "Tempo Run",
+            "club": {"id": \(healthyClubId), "name": "Healthy Club"},
+            "activity_type": "Run",
+            "upcoming_occurrences": ["\(futureStart)"]
+        }]
+        """)
+        let brokenURL = URL(string: "https://www.strava.com/api/v3/clubs/\(brokenClubId)/group_events")!
+        mockSession.setMockJSONResponse(for: brokenURL, json: "{}", statusCode: serverErrorStatus)
+
+        let service = StravaService(keychain: mockKeychain, session: mockSession)
+        let fetch = await service.getEventsForClubs([healthyClubId, brokenClubId])
+
+        #expect(fetch.events.map(\.id) == [555], "Healthy club's events should still be returned")
+        #expect(fetch.failedClubIds == [brokenClubId])
+        guard case .serverError(let statusCode)? = fetch.firstError as? StravaError else {
+            Issue.record("Expected StravaError.serverError, got \(String(describing: fetch.firstError))")
+            return
+        }
+        #expect(statusCode == serverErrorStatus)
     }
 
     // MARK: - Mock Session Tests

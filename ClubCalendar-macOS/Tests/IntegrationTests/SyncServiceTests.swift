@@ -5,6 +5,17 @@ import Foundation
 
 @Suite("SyncService Tests")
 struct SyncServiceTests {
+    // MARK: - SyncError Tests
+
+    @Test("SyncError.clubFetchFailed describes the count and the cause")
+    func syncErrorClubFetchFailedDescription() {
+        let single = SyncError.clubFetchFailed(clubIds: [1], underlying: StravaError.invalidResponse)
+        #expect(single.localizedDescription == "Could not fetch events for 1 club: Invalid response from Strava.")
+
+        let several = SyncError.clubFetchFailed(clubIds: [1, 2], underlying: StravaError.invalidResponse)
+        #expect(several.localizedDescription.hasPrefix("Could not fetch events for 2 clubs:"), "Got: \(several.localizedDescription)")
+    }
+
     // MARK: - lastSyncTimeFormatted Tests
 
     @Test("lastSyncTimeFormatted returns nil when no sync time")

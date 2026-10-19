@@ -6,9 +6,25 @@ import AppKit
 #endif
 
 extension Notification.Name {
-    /// Posted on the main queue after a successful `SyncService.sync()` so
-    /// derived UI state (e.g. AppState's cached upcoming events) can refresh.
+    /// Posted on the main queue after `SyncService.sync()` wrote to the
+    /// calendar so derived UI state (e.g. AppState's cached upcoming events)
+    /// can refresh. Also posted when some clubs failed to fetch.
     public static let syncDidComplete = Notification.Name("ClubCalendar.SyncService.syncDidComplete")
+}
+
+/// Errors raised by `SyncService`.
+public enum SyncError: Error, LocalizedError, Sendable {
+    /// Some clubs could not be fetched. The calendar was still updated for
+    /// the clubs that succeeded, and events of the failed clubs were left as is.
+    case clubFetchFailed(clubIds: [Int], underlying: any Error)
+
+    public var errorDescription: String? {
+        switch self {
+        case .clubFetchFailed(let clubIds, let underlying):
+            let noun = clubIds.count == 1 ? "club" : "clubs"
+            return "Could not fetch events for \(clubIds.count) \(noun): \(underlying.localizedDescription)"
+        }
+    }
 }
 
 /// Orchestrates syncing between Strava and Calendar.
@@ -163,15 +179,21 @@ public final class SyncService {
             Logger.sync.info("Fetching events for \(clubIds.count) club(s)")
 
             // Fetch events from Strava
-            let events = await stravaService.getEventsForClubs(clubIds)
-            Logger.sync.info("Fetched \(events.count) event(s) from Strava")
+            let fetch = await stravaService.getEventsForClubs(clubIds)
+            Logger.sync.info("Fetched \(fetch.events.count) event(s) from Strava")
 
-            // Sync to calendar
-            let result = try await calendarService.syncEvents(events)
+            // Sync to calendar. Clubs whose fetch failed are passed along so
+            // their events are not marked cancelled on a transient error.
+            let result = try await calendarService.syncEvents(fetch.events, failedClubIds: fetch.failedClubIds)
 
             Logger.sync.info("Sync complete: \(result.summary)")
             lastSyncResult = result
             lastSyncTime = Date()
+            if let firstError = fetch.firstError {
+                let failed = fetch.failedClubIds.sorted()
+                Logger.sync.error("Sync incomplete: \(failed.count) club fetch(es) failed")
+                lastSyncError = SyncError.clubFetchFailed(clubIds: failed, underlying: firstError)
+            }
             NotificationCenter.default.post(name: .syncDidComplete, object: nil)
         } catch {
             lastSyncError = error
