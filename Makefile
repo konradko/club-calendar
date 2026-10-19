@@ -38,11 +38,11 @@ MACOS_ENTITLEMENTS = $(MACOS_SRC_DIR)/Resources/ClubCalendar.entitlements
 IOS_PROJECT_DIR = ClubCalendar-iOS
 IOS_PROJECT = $(IOS_PROJECT_DIR)/ClubCalendar-iOS.xcodeproj
 IOS_SCHEME = ClubCalendarIOS
-# iOS 26.5 SDK ships iPhone 17-series sims only — closest match to your
-# iPhone 16 Pro Max is iPhone 17 Pro Max (same screen geometry).
+# Matches the physical test device. Xcode does not ship this simulator by
+# default, create it once with:
+#   xcrun simctl create "iPhone 16 Pro Max" com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro-Max com.apple.CoreSimulator.SimRuntime.iOS-26-5
 # Override via `make ios-test IOS_SIM_DEVICE='iPhone 17 Pro'` if you prefer.
-IOS_SIM_DEVICE ?= iPhone 17 Pro Max
-IOS_SIM_DESTINATION = platform=iOS Simulator,name=$(IOS_SIM_DEVICE)
+IOS_SIM_DEVICE ?= iPhone 16 Pro Max
 IOS_DEVICE_DESTINATION ?= generic/platform=iOS
 IOS_ARCHIVE_PATH = .build/ios/ClubCalendar.xcarchive
 IOS_BUNDLE_ID = com.clubcalendar.ios
@@ -233,12 +233,21 @@ endef
 ios-gen:
 	@cd $(IOS_PROJECT_DIR) && xcodegen generate
 
+# Resolves $$DEVICE_ID for the configured simulator. A name-only destination
+# makes xcodebuild assume OS:latest, which fails when the device exists only
+# on an older installed runtime.
+define resolve_sim_id
+	DEVICE_ID=$$(xcrun simctl list devices available | grep -E "$(IOS_SIM_DEVICE) \(" | head -1 | sed -E 's/.*\(([A-F0-9-]+)\).*/\1/'); \
+	if [ -z "$$DEVICE_ID" ]; then echo "Simulator '$(IOS_SIM_DEVICE)' not found"; exit 1; fi
+endef
+
 # Build iOS debug for the default simulator
 ios-build: ios-gen
-	@xcodebuild build \
+	@$(resolve_sim_id); \
+	xcodebuild build \
 		-project $(IOS_PROJECT) \
 		-scheme $(IOS_SCHEME) \
-		-destination '$(IOS_SIM_DESTINATION)' \
+		-destination "platform=iOS Simulator,id=$$DEVICE_ID" \
 		$(IOS_SIM_SIGNING)
 
 # Run the iOS unit-test bundle on the default simulator. We pre-grant
@@ -247,10 +256,9 @@ ios-build: ios-gen
 # real-EventKit integration tests in CalendarServiceIntegrationTests can
 # actually write to the store.
 # Resolves $$DEVICE_ID for the configured simulator, boots it, and grants
-# Calendar permission. Shared by ios-test / ios-test-suite / ios-run.
+# Calendar permission. Shared by ios-test / ios-test-suite / ios-test-verbose.
 define resolve_sim_device
-	DEVICE_ID=$$(xcrun simctl list devices available | grep -E "$(IOS_SIM_DEVICE) \(" | head -1 | sed -E 's/.*\(([A-F0-9-]+)\).*/\1/'); \
-	if [ -z "$$DEVICE_ID" ]; then echo "Simulator '$(IOS_SIM_DEVICE)' not found"; exit 1; fi; \
+	$(resolve_sim_id); \
 	xcrun simctl boot $$DEVICE_ID 2>/dev/null || true; \
 	xcrun simctl privacy $$DEVICE_ID grant calendar $(IOS_BUNDLE_ID)
 endef
@@ -280,10 +288,11 @@ ios-test-suite: ios-gen
 
 # Verbose iOS tests (full xcodebuild output)
 ios-test-verbose: ios-gen
-	@xcodebuild test \
+	@$(resolve_sim_device); \
+	xcodebuild test \
 		-project $(IOS_PROJECT) \
 		-scheme $(IOS_SCHEME) \
-		-destination '$(IOS_SIM_DESTINATION)' \
+		-destination "platform=iOS Simulator,id=$$DEVICE_ID" \
 		-enableCodeCoverage YES \
 		$(IOS_SIM_SIGNING)
 
@@ -295,10 +304,9 @@ ios-coverage: ios-test
 
 # Boot the iPhone simulator and install/launch the debug app
 ios-run: ios-build
-	@DEVICE_ID=$$(xcrun simctl list devices available | grep -E "$(IOS_SIM_DEVICE) \(" | head -1 | sed -E 's/.*\(([A-F0-9-]+)\).*/\1/'); \
-	if [ -z "$$DEVICE_ID" ]; then echo "Simulator '$(IOS_SIM_DEVICE)' not found"; exit 1; fi; \
+	@$(resolve_sim_id); \
 	xcrun simctl boot $$DEVICE_ID 2>/dev/null || true; \
-	open -a Simulator; \
+	open -b com.apple.dt.Devices; \
 	APP=$$(find ~/Library/Developer/Xcode/DerivedData -name 'ClubCalendar.app' -path '*iphonesimulator*' -print0 2>/dev/null | xargs -0 ls -td 2>/dev/null | head -1); \
 	xcrun simctl install $$DEVICE_ID "$$APP"; \
 	xcrun simctl launch $$DEVICE_ID $(IOS_BUNDLE_ID)
