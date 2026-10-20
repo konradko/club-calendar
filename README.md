@@ -18,17 +18,6 @@ Native SwiftUI, no background daemons, no third-party runtime dependencies.
 
 ## Installation
 
-### Download
-
-Grab the latest DMG from [Releases](https://github.com/konradko/club-calendar/releases), open it, drag **Club Calendar** to Applications, and launch.
-
-> **First launch:** the app is self-signed (not notarized), so Gatekeeper
-> blocks a downloaded copy with "Apple could not verify...". Open **System
-> Settings → Privacy & Security**, scroll down, and click **Open Anyway**.
-> This is needed once per install. Locally built apps (`make macos-dev`,
-> `make macos-dmg`) launch without this step since they carry no quarantine
-> attribute.
-
 ### Build from source
 
 ```bash
@@ -36,6 +25,8 @@ git clone https://github.com/konradko/club-calendar
 cd club-calendar
 make macos-dmg
 ```
+
+`make macos-dmg` builds a signed release app, packs it into `ClubCalendar.dmg` and opens the DMG. Drag **ClubCalendar** to Applications and launch it.
 
 Requires macOS 26+ and Swift 6.2 (Xcode 26).
 
@@ -50,20 +41,27 @@ There's also an iOS app sharing the same `ClubCalendarCore` logic. See
 1. **Get Strava API credentials** at [strava.com/settings/api](https://www.strava.com/settings/api). Strava allows one API application per account — the same one serves both the macOS and iOS apps. Set its **Authorization Callback Domain** to `callback` (a bare host, no scheme or slashes) — this must match the host of the app's `clubcalendar://callback` redirect URI. Note your Client ID and Client Secret.
 2. **Launch the app** — onboarding will walk you through entering credentials, authenticating with Strava, picking clubs to sync, and granting Calendar access.
 
-Credentials and OAuth tokens are stored in the macOS Keychain (data-protection-style legacy file keychain — see [keychain notes](#why-the-legacy-file-keychain)).
+Credentials and OAuth tokens are stored in the Keychain. On macOS this is the legacy file keychain (see [keychain notes](#why-the-legacy-file-keychain)). On iOS it is the data-protection keychain.
 
 ## Project layout
 
 ```
-ClubCalendar/
-├── App/         # ClubCalendarApp (SwiftUI @main), AppState
-├── Models/      # Club, ClubEvent, Settings
-├── Services/    # StravaService, CalendarService, AuthService, SyncService, KeychainHelper
-├── Views/       # MenuBarView, SettingsView (+ subviews), OnboardingView
-├── Utilities/   # Logger, ActivityEmoji
-└── Resources/   # Icons, entitlements
-ClubCalendarTests/
-Makefile         # build / bundle / sign / dmg / dev / test
+ClubCalendarCore/        # Shared library for both apps
+├── Models/              # Club, ClubEvent, Settings
+├── Services/            # StravaService, CalendarService, AuthService, SyncService, Protocols
+└── Utilities/           # Logger, ActivityEmoji, KeychainHelper
+ClubCalendar-macOS/
+├── Sources/
+│   ├── App/             # ClubCalendarApp (SwiftUI @main), AppState
+│   ├── Views/           # MenuBarView, SettingsView (+ Settings/ tabs), OnboardingView
+│   └── Resources/       # Icons, entitlements
+└── Tests/               # ClubCalendarMacTests (macOS + Core tests)
+ClubCalendar-iOS/
+├── Sources/             # ClubCalendarApp (@main), AppState, BackgroundSync, Views/
+├── Tests/               # ClubCalendarIOSTests
+└── project.yml          # xcodegen spec for the Xcode project
+Package.swift            # SwiftPM: ClubCalendarCore, ClubCalendarMac, ClubCalendarMacTests
+Makefile                 # build / bundle / sign / dmg / dev / test, macOS and iOS
 ```
 
 ## Architecture
@@ -73,7 +71,7 @@ ClubCalendarApp (SwiftUI @main)
   └── AppState (@MainActor @Observable — composition root + UI state)
         ├── KeychainHelper          ← legacy file keychain, kSecAttrAccessibleAfterFirstUnlock
         ├── AppSettings             ← @AppStorage + JSON-encoded clubs
-        ├── StravaService (actor)   ← HTTPS to api.strava.com
+        ├── StravaService (actor)   ← HTTPS to www.strava.com/api/v3
         ├── CalendarService (actor) ← EventKit
         ├── AuthService             ← ASWebAuthenticationSession (clubcalendar://callback)
         └── SyncService             ← NSBackgroundActivityScheduler + wake notification
